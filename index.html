@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>트립비토즈 이메일 에디터</title>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── TOPBAR ── -->
+<div class="topbar">
+  <div class="topbar-logo">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect width="20" height="20" rx="4" fill="#7B3CFF"/><path d="M5 10h10M10 5v10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+    <span id="topbar-title">트립비토즈 <small>이메일 에디터</small></span>
+    <input id="tpl-name-input" placeholder="템플릿 이름 입력..." style="display:none">
+  </div>
+  <div class="topbar-right">
+    <div id="topbar-editor-actions" style="display:none;gap:8px;align-items:center">
+      <button class="btn-top secondary" onclick="goList()">← 목록</button>
+      <button class="btn-top secondary" onclick="saveTemplate()">💾 저장</button>
+      <button class="btn-top primary" onclick="copyHTML()">HTML 복사</button>
+    </div>
+    <button class="btn-top secondary" onclick="openSettings()" title="설정">⚙️</button>
+  </div>
+</div>
+
+<!-- ══ LIST VIEW ══ -->
+<div id="view-list" class="view active">
+  <div class="list-header">
+    <div>
+      <div class="list-title">템플릿 목록</div>
+      <div class="list-sub" id="tpl-count"></div>
+    </div>
+    <button class="btn-primary" onclick="newTemplate()">+ 새 템플릿 만들기</button>
+  </div>
+  <div class="tpl-grid" id="tpl-grid"></div>
+</div>
+
+<!-- ══ EDITOR VIEW ══ -->
+<div id="view-editor" class="view">
+  <div class="left">
+    <div class="left-header">
+      <h2>블록 에디터</h2>
+      <p>블록 추가 후 순서를 드래그로 조정하세요</p>
+    </div>
+    <div class="add-bar">
+      <div class="add-bar-label">블록 추가</div>
+      <button class="add-btn" onclick="addBlock('logo')">🏷 로고</button>
+      <button class="add-btn" onclick="addBlock('title')">✏️ 타이틀</button>
+      <button class="add-btn" onclick="addBlock('text')">📝 텍스트</button>
+      <button class="add-btn" onclick="addBlock('highlight')">🔖 강조박스</button>
+      <button class="add-btn" onclick="addBlock('hotels')">🏨 호텔그리드</button>
+      <button class="add-btn" onclick="addBlock('reservation')">📋 예약내역표</button>
+      <button class="add-btn" onclick="addBlock('cta')">🔗 버튼</button>
+      <button class="add-btn" onclick="addBlock('divider')">➖ 구분선</button>
+      <button class="add-btn" onclick="addBlock('notice')">⚠️ 안내사항</button>
+      <button class="add-btn" onclick="addBlock('imagemap')">🖼 이미지+링크</button>
+      <button class="add-btn" onclick="addBlock('banner')">📡 앱배너</button>
+      <button class="add-btn" onclick="addBlock('footer')">📋 푸터</button>
+    </div>
+    <div class="block-list" id="block-list"></div>
+  </div>
+  <div class="right">
+    <div class="right-header">
+      <span>미리보기 — 600px</span>
+      <span id="block-count" style="font-size:11px;color:#bbb"></span>
+    </div>
+    <div class="preview-wrap">
+      <div class="email-frame" id="preview"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ══ SETTINGS MODAL ══ -->
+<div id="settings-modal" class="modal-overlay" style="display:none" onclick="closeSettingsOverlay(event)">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>전역 설정</span>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-section-title">푸터 설정</div>
+      <div class="fl">고객센터 전화번호</div>
+      <input class="fi" id="s-phone" placeholder="02-711-6880">
+      <div class="fl">회사 정보</div>
+      <textarea class="fi" id="s-company" rows="2" placeholder="주식회사 트립비토즈 | 대표이사 : 정지하 | 사업자등록번호 : 778-86-00179"></textarea>
+      <div class="fl">주소</div>
+      <input class="fi" id="s-address" placeholder="(06160) 서울시 강남구 테헤란로 415, L7 빌딩">
+      <div class="fl">웹사이트 URL</div>
+      <input class="fi" id="s-website" placeholder="https://www.tripbtoz.com/">
+      <div class="fl">웹사이트 표시 텍스트</div>
+      <input class="fi" id="s-websiteLabel" placeholder="www.tripbtoz.com — 모든 여행자가 만나는 세상, 트립비토즈">
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeSettings()">취소</button>
+      <button class="btn-primary" onclick="saveSettings()">저장</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
