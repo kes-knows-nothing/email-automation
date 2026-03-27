@@ -17,6 +17,11 @@
     <span id="topbar-title">트립비토즈 <small>이메일 에디터</small></span>
     <input id="tpl-name-input" placeholder="템플릿 이름 입력..." style="display:none">
   </div>
+  <div id="topbar-nav" class="topbar-nav">
+    <button class="nav-tab active" id="nav-template" onclick="goTab('list')">템플릿</button>
+    <button class="nav-tab" id="nav-segment" onclick="goTab('segment')">세그먼트</button>
+    <button class="nav-tab" id="nav-sql" onclick="goTab('sql')">SQL</button>
+  </div>
   <div class="topbar-right">
     <div id="topbar-editor-actions" style="display:none;gap:8px;align-items:center">
       <button class="btn-top secondary" onclick="goList()">← 목록</button>
@@ -75,6 +80,75 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- ══ SQL VIEW ══ -->
+<div id="view-sql" class="view sql-view">
+  <div class="sql-editor-panel">
+    <div class="sql-toolbar">
+      <span class="sql-toolbar-title">SQL 에디터</span>
+      <span class="sql-shortcut">⌘ + Enter 실행</span>
+      <button class="btn-top secondary" onclick="clearSQL()">지우기</button>
+      <button class="btn-top primary" id="sql-run-btn" onclick="runSQL()">▶ 실행</button>
+    </div>
+    <textarea id="sql-input" class="sql-textarea" placeholder="SELECT * FROM users LIMIT 10;" spellcheck="false"></textarea>
+  </div>
+  <div class="sql-result-panel">
+    <div class="sql-result-bar" id="sql-result-bar"></div>
+    <div class="sql-result-body" id="sql-result-body">
+      <div class="sql-empty">쿼리를 실행하면 결과가 여기에 표시됩니다</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SEGMENT VIEW ══ -->
+<div id="view-segment" class="view">
+  <div class="list-header">
+    <div>
+      <div class="list-title">세그먼트</div>
+      <div class="list-sub" id="seg-count"></div>
+    </div>
+    <button class="btn-primary" onclick="openNewSegment()">+ 새 세그먼트 만들기</button>
+  </div>
+  <div class="seg-grid" id="seg-grid"></div>
+</div>
+
+<!-- ══ SEGMENT MODAL ══ -->
+<div id="seg-modal" class="modal-overlay" style="display:none" onclick="closeSegModalOverlay(event)">
+  <div class="modal-box seg-modal-box">
+    <div class="modal-header">
+      <span id="seg-modal-title">새 세그먼트 만들기</span>
+      <button class="modal-close" onclick="closeNewSegment()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="fl">세그먼트 이름</div>
+      <input class="fi" id="seg-name" placeholder="예: 7월 프로모션 대상자">
+
+      <div id="seg-upload-area">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px">
+          <div class="fl" style="margin-top:0">CSV 파일 업로드</div>
+          <button class="csv-template-btn" onclick="downloadCSVTemplate()">⬇ 양식 다운로드</button>
+        </div>
+        <div class="csv-drop" id="csv-drop" onclick="document.getElementById('csv-file').click()">
+          <div class="csv-drop-icon">📂</div>
+          <div class="csv-drop-text">CSV 파일을 선택하거나 여기에 드래그하세요</div>
+          <div class="csv-drop-sub">이메일 컬럼이 포함된 CSV 파일 (email, 이메일 등)</div>
+        </div>
+        <input type="file" id="csv-file" accept=".csv" style="display:none" onchange="handleCSV(this)">
+      </div>
+
+      <div id="csv-result" style="display:none">
+        <div class="csv-stat" id="csv-stat"></div>
+        <div class="csv-table-wrap">
+          <table class="csv-table" id="csv-table"></table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeNewSegment()">닫기</button>
+      <button class="btn-primary" id="seg-save-btn" onclick="saveSegment()" style="display:none">저장</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══ SETTINGS MODAL ══ -->
 <div id="settings-modal" class="modal-overlay" style="display:none" onclick="closeSettingsOverlay(event)">

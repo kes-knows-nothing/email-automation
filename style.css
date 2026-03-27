@@ -158,6 +158,76 @@ input[type=file].fi-file { display: none; }
 .modal-section-title { font-size: 11px; font-weight: 700; color: #7B3CFF; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
 .modal-footer { padding: 14px 20px; border-top: 1px solid #eee; display: flex; justify-content: flex-end; gap: 8px; }
 
+/* ══ SQL VIEW ══ */
+.sql-view { display: none; flex-direction: column; height: 100vh; padding-top: 48px; }
+.sql-view.active { display: flex !important; }
+.sql-editor-panel { display: flex; flex-direction: column; height: 40%; border-bottom: 2px solid #e0e0e0; background: #1e1e1e; }
+.sql-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #161616; border-bottom: 1px solid #333; }
+.sql-toolbar-title { font-size: 12px; font-weight: 600; color: #888; flex: 1; }
+.sql-shortcut { font-size: 11px; color: #555; }
+.sql-textarea { flex: 1; background: #1e1e1e; color: #d4d4d4; font-family: 'Menlo','Monaco','Consolas',monospace; font-size: 13px; line-height: 1.6; padding: 16px; border: none; outline: none; resize: none; }
+.sql-textarea::placeholder { color: #555; }
+.sql-result-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #fff; }
+.sql-result-bar { padding: 8px 16px; font-size: 12px; color: #666; background: #f5f5f5; border-bottom: 1px solid #e8e8e8; min-height: 34px; display: flex; align-items: center; gap: 8px; }
+.sql-stat-ok { font-weight: 700; color: #2ea043; }
+.sql-stat-err { font-weight: 700; color: #e24b4a; }
+.sql-result-body { flex: 1; overflow: auto; }
+.sql-result-body::-webkit-scrollbar { width: 6px; height: 6px; }
+.sql-result-body::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
+.sql-empty { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 13px; color: #bbb; }
+.sql-error { padding: 20px; font-size: 13px; color: #e24b4a; font-family: 'Menlo','Monaco',monospace; white-space: pre-wrap; }
+.sql-error code { background: #fff5f5; padding: 2px 6px; border-radius: 4px; }
+.sql-table-wrap { overflow: auto; }
+.sql-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
+.sql-table thead th { background: #f5f5f5; padding: 8px 14px; text-align: left; font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0; border-right: 1px solid #e8e8e8; position: sticky; top: 0; white-space: nowrap; }
+.sql-table td { padding: 7px 14px; border-bottom: 1px solid #f0f0f0; border-right: 1px solid #f5f5f5; color: #333; white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+.sql-table tbody tr:hover { background: #f9f7ff; }
+.sql-null { color: #bbb; font-style: italic; font-size: 11px; }
+
+/* ── NAV TABS ── */
+.topbar-nav { display: flex; gap: 4px; }
+.nav-tab { padding: 5px 16px; font-size: 13px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; background: transparent; color: #888; transition: all 0.15s; }
+.nav-tab:hover { background: #2a2a2a; color: #fff; }
+.nav-tab.active { background: #7B3CFF; color: #fff; }
+
+/* ══ SEGMENT VIEW ══ */
+#view-segment { padding: 68px 32px 40px; max-width: 1100px; margin: 0 auto; }
+.seg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.seg-card { background: #fff; border: 1px solid #e8e8e8; border-radius: 12px; padding: 20px; transition: box-shadow 0.15s, border-color 0.15s; }
+.seg-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); border-color: #ccc; }
+.seg-card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.seg-icon { font-size: 28px; }
+.seg-info { flex: 1; overflow: hidden; }
+.seg-name { font-size: 14px; font-weight: 600; color: #181818; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seg-meta { font-size: 11px; color: #bbb; margin-top: 2px; }
+.seg-count-badge { display: inline-block; padding: 4px 12px; background: #f0ebff; color: #7B3CFF; font-size: 13px; font-weight: 700; border-radius: 20px; margin-bottom: 14px; }
+.seg-card-actions { display: flex; gap: 6px; }
+
+/* SEGMENT MODAL */
+.seg-modal-box { width: 560px; max-width: 95vw; }
+
+.csv-template-btn { font-size: 11px; font-weight: 600; padding: 4px 10px; border: 1px solid #e0e0e0; border-radius: 6px; background: #fff; color: #7B3CFF; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.csv-template-btn:hover { background: #f0ebff; border-color: #c4a8ff; }
+
+/* CSV UPLOAD */
+.csv-drop { border: 2px dashed #e0e0e0; border-radius: 10px; padding: 32px 20px; text-align: center; cursor: pointer; transition: all 0.15s; margin-top: 4px; background: #fafafa; }
+.csv-drop:hover { border-color: #7B3CFF; background: #f5f0ff; }
+.csv-drop-icon { font-size: 28px; margin-bottom: 8px; }
+.csv-drop-text { font-size: 13px; font-weight: 500; color: #555; }
+.csv-drop-sub { font-size: 11px; color: #bbb; margin-top: 4px; }
+.csv-stat { font-size: 13px; color: #555; padding: 14px 0 8px; }
+.csv-stat strong { color: #7B3CFF; font-size: 15px; }
+.csv-table-wrap { max-height: 280px; overflow-y: auto; border: 1px solid #e8e8e8; border-radius: 8px; }
+.csv-table-wrap::-webkit-scrollbar { width: 4px; }
+.csv-table-wrap::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
+.csv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.csv-table thead th { background: #f5f5f5; padding: 8px 12px; text-align: left; font-weight: 600; color: #555; border-bottom: 1px solid #e8e8e8; position: sticky; top: 0; }
+.csv-table td { padding: 7px 12px; border-bottom: 1px solid #f5f5f5; color: #333; }
+.csv-table tbody tr:last-child td { border-bottom: none; }
+.csv-table tbody tr:hover { background: #f9f7ff; }
+.csv-table td:first-child { color: #bbb; width: 48px; font-size: 11px; }
+.csv-more { text-align: center; color: #bbb; font-style: italic; padding: 10px !important; }
+
 /* TOAST */
 .toast { position: fixed; bottom: 24px; right: 24px; background: #181818; color: #fff; font-size: 12px; padding: 10px 18px; border-radius: 8px; opacity: 0; transform: translateY(6px); transition: all 0.2s; pointer-events: none; z-index: 999; }
 .toast.show { opacity: 1; transform: translateY(0); }

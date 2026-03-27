@@ -51,12 +51,21 @@ let currentTplId = null;
 function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + name).classList.add('active');
-  document.getElementById('topbar-editor-actions').style.display = name === 'editor' ? 'flex' : 'none';
+  const isEditor = name === 'editor';
+  document.getElementById('topbar-editor-actions').style.display = isEditor ? 'flex' : 'none';
   document.getElementById('topbar-editor-actions').style.flexDirection = 'row';
-  document.getElementById('tpl-name-input').style.display = name === 'editor' ? 'block' : 'none';
+  document.getElementById('tpl-name-input').style.display = isEditor ? 'block' : 'none';
+  document.getElementById('topbar-nav').style.display = isEditor ? 'none' : 'flex';
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  const navMap = { list: 'nav-template', segment: 'nav-segment', sql: 'nav-sql' };
+  if(navMap[name]) document.getElementById(navMap[name]).classList.add('active');
   currentView = name;
   if(name === 'list') renderTemplateList();
+  if(name === 'segment') renderSegmentList();
+  if(name === 'sql') initSQLView();
 }
+
+function goTab(tab) { showView(tab); }
 
 function goList() { showView('list'); }
 
@@ -540,3 +549,257 @@ function showToast(msg) {
 // INIT
 // ═══════════════════════════════════════════
 renderTemplateList();
+
+// ═══════════════════════════════════════════
+// SQL EDITOR
+// ═══════════════════════════════════════════
+function initSQLView() {
+  const input = document.getElementById('sql-input');
+  if(input._sqlKeyBound) return;
+  input._sqlKeyBound = true;
+  input.addEventListener('keydown', e => {
+    if((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runSQL(); }
+    if(e.key === 'Tab') { e.preventDefault(); const s = input.selectionStart; input.value = input.value.slice(0,s) + '  ' + input.value.slice(input.selectionEnd); input.selectionStart = input.selectionEnd = s + 2; }
+  });
+}
+
+function clearSQL() {
+  document.getElementById('sql-input').value = '';
+  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">쿼리를 실행하면 결과가 여기에 표시됩니다</div>';
+  document.getElementById('sql-input').focus();
+}
+
+async function runSQL() {
+  const sql = document.getElementById('sql-input').value.trim();
+  if(!sql) return;
+
+  const btn = document.getElementById('sql-run-btn');
+  btn.disabled = true; btn.textContent = '실행 중...';
+  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">실행 중...</div>';
+
+  try {
+    const res = await fetch('http://localhost:3001/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql }),
+    });
+    const data = await res.json();
+
+    if(data.error) {
+      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">오류</span>`;
+      document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">${data.error}</div>`;
+      return;
+    }
+
+    if(data.type === 'ok') {
+      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-ok">완료</span> ${data.affectedRows}행 영향 · ${data.elapsed}ms`;
+      document.getElementById('sql-result-body').innerHTML = '';
+      return;
+    }
+
+    document.getElementById('sql-result-bar').innerHTML =
+      `<span class="sql-stat-ok">완료</span> ${data.total.toLocaleString()}행 · ${data.elapsed}ms`;
+
+    if(data.rows.length === 0) {
+      document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">결과 없음</div>';
+      return;
+    }
+
+    const thead = `<thead><tr>${data.columns.map(c => `<th>${c}</th>`).join('')}</tr></thead>`;
+    const tbody = `<tbody>${data.rows.map(row =>
+      `<tr>${row.map(v => `<td>${v === null ? '<span class="sql-null">NULL</span>' : String(v)}</td>`).join('')}</tr>`
+    ).join('')}</tbody>`;
+
+    document.getElementById('sql-result-body').innerHTML =
+      `<div class="sql-table-wrap"><table class="sql-table">${thead}${tbody}</table></div>`;
+  } catch(e) {
+    document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
+    document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요. <code>npm run dev</code> 실행 중인지 확인하세요.</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ 실행';
+  }
+}
+
+// ═══════════════════════════════════════════
+// SEGMENT
+// ═══════════════════════════════════════════
+let parsedEmails = [];
+let segViewMode = false;
+
+async function renderSegmentList() {
+  const { data: list, error } = await sb.from('segments').select('id,name,count,created_at').order('created_at', { ascending: false });
+  if(error) { console.error(error); return; }
+  document.getElementById('seg-count').textContent = `총 ${list.length}개`;
+  const grid = document.getElementById('seg-grid');
+  if(list.length === 0) {
+    grid.innerHTML = `<div class="empty-state">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="16" stroke="#ddd" stroke-width="2"/><path d="M17 24h14M24 17v14" stroke="#ddd" stroke-width="2" stroke-linecap="round"/></svg>
+      <p>아직 세그먼트가 없어요</p>
+      <small>CSV를 업로드해서 수신자 그룹을 만드세요</small>
+    </div>`;
+    return;
+  }
+  grid.innerHTML = list.map(s => {
+    const created = s.created_at
+      ? new Date(s.created_at).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : '';
+    return `<div class="seg-card">
+      <div class="seg-card-top">
+        <div class="seg-icon">👥</div>
+        <div class="seg-info">
+          <div class="seg-name">${s.name}</div>
+          <div class="seg-meta">${created}</div>
+        </div>
+      </div>
+      <div class="seg-count-badge">${Number(s.count).toLocaleString()}명</div>
+      <div class="seg-card-actions">
+        <button class="btn-secondary" onclick="viewSegment('${s.id}')">보기</button>
+        <button class="btn-danger" onclick="deleteSegment('${s.id}', '${s.name}')">삭제</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openNewSegment() {
+  segViewMode = false;
+  parsedEmails = [];
+  document.getElementById('seg-modal-title').textContent = '새 세그먼트 만들기';
+  document.getElementById('seg-name').value = '';
+  document.getElementById('seg-name').readOnly = false;
+  document.getElementById('seg-upload-area').style.display = 'block';
+  document.getElementById('csv-result').style.display = 'none';
+  document.getElementById('csv-drop').innerHTML = `<div class="csv-drop-icon">📂</div><div class="csv-drop-text">CSV 파일을 선택하거나 여기에 드래그하세요</div><div class="csv-drop-sub">이메일 컬럼이 포함된 CSV 파일 (email, 이메일 등)</div>`;
+  document.getElementById('csv-file').value = '';
+  document.getElementById('seg-save-btn').style.display = 'inline-flex';
+  document.getElementById('seg-save-btn').disabled = true;
+  document.getElementById('seg-save-btn').textContent = '저장';
+  setupCSVDrop();
+  document.getElementById('seg-modal').style.display = 'flex';
+}
+
+async function viewSegment(id) {
+  const { data, error } = await sb.from('segments').select('*').eq('id', id).single();
+  if(error || !data) { showToast('불러오기 실패'); return; }
+  document.getElementById('seg-modal-title').textContent = data.name;
+  document.getElementById('seg-name').value = data.name;
+  document.getElementById('seg-name').readOnly = true;
+  document.getElementById('seg-upload-area').style.display = 'none';
+  document.getElementById('seg-save-btn').style.display = 'none';
+  showEmailTable(data.emails);
+  document.getElementById('seg-modal').style.display = 'flex';
+}
+
+function closeNewSegment() { document.getElementById('seg-modal').style.display = 'none'; }
+function closeSegModalOverlay(e) { if(e.target === e.currentTarget) closeNewSegment(); }
+
+function setupCSVDrop() {
+  const drop = document.getElementById('csv-drop');
+  drop.ondragover = e => { e.preventDefault(); drop.style.borderColor = '#7B3CFF'; drop.style.background = '#f5f0ff'; };
+  drop.ondragleave = () => { drop.style.borderColor = ''; drop.style.background = ''; };
+  drop.ondrop = e => {
+    e.preventDefault();
+    drop.style.borderColor = ''; drop.style.background = '';
+    const file = e.dataTransfer.files[0];
+    if(file && file.name.endsWith('.csv')) readCSVFile(file);
+    else showToast('CSV 파일만 업로드 가능합니다');
+  };
+}
+
+function handleCSV(input) {
+  if(input.files[0]) readCSVFile(input.files[0]);
+}
+
+function readCSVFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => parseCSV(e.target.result, file.name);
+  reader.readAsText(file, 'UTF-8');
+}
+
+function parseCSV(text, fileName) {
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const lines = text.trim().split(/\r?\n/);
+  if(lines.length < 2) { showToast('데이터가 없습니다'); return; }
+
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+  const emailIdx = headers.findIndex(h => /email|이메일|e-mail|mail/i.test(h));
+
+  if(emailIdx === -1) {
+    showToast('이메일 컬럼을 찾을 수 없어요 (email, 이메일, mail 중 하나 필요)');
+    return;
+  }
+
+  const emails = [];
+  for(let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    const email = (cols[emailIdx] || '').trim().replace(/^"|"$/g, '');
+    if(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) emails.push(email);
+  }
+
+  if(emails.length === 0) { showToast('유효한 이메일이 없습니다'); return; }
+
+  parsedEmails = emails;
+  document.getElementById('csv-drop').innerHTML = `<div style="font-size:13px;font-weight:600;color:#181818">📄 ${fileName}</div><div style="font-size:11px;color:#999;margin-top:4px">다른 파일로 교체하려면 클릭</div>`;
+  showEmailTable(emails);
+  document.getElementById('seg-save-btn').disabled = false;
+}
+
+function parseCSVLine(line) {
+  const result = []; let inQuote = false; let cur = '';
+  for(const c of line) {
+    if(c === '"') inQuote = !inQuote;
+    else if(c === ',' && !inQuote) { result.push(cur); cur = ''; }
+    else cur += c;
+  }
+  result.push(cur);
+  return result;
+}
+
+function showEmailTable(emails) {
+  const result = document.getElementById('csv-result');
+  result.style.display = 'block';
+  const preview = emails.slice(0, 100);
+  const more = emails.length - preview.length;
+  document.getElementById('csv-stat').innerHTML = `총 <strong>${emails.length.toLocaleString()}명</strong>의 이메일 주소`;
+  document.getElementById('csv-table').innerHTML = `
+    <thead><tr><th>#</th><th>이메일</th></tr></thead>
+    <tbody>
+      ${preview.map((e, i) => `<tr><td>${i + 1}</td><td>${e}</td></tr>`).join('')}
+      ${more > 0 ? `<tr><td colspan="2" class="csv-more">... 외 ${more.toLocaleString()}명 더</td></tr>` : ''}
+    </tbody>`;
+}
+
+async function saveSegment() {
+  const name = document.getElementById('seg-name').value.trim();
+  if(!name) { showToast('세그먼트 이름을 입력해주세요'); return; }
+  if(parsedEmails.length === 0) { showToast('이메일 목록이 없습니다'); return; }
+
+  const btn = document.getElementById('seg-save-btn');
+  btn.disabled = true; btn.textContent = '저장 중...';
+
+  const { error } = await sb.from('segments').insert({ name, emails: parsedEmails, count: parsedEmails.length });
+  if(error) { showToast('저장 실패: ' + error.message); btn.disabled = false; btn.textContent = '저장'; return; }
+
+  closeNewSegment();
+  showToast(`"${name}" 저장 완료 (${parsedEmails.length.toLocaleString()}명)`);
+  renderSegmentList();
+}
+
+function downloadCSVTemplate() {
+  const csv = 'email,name\nsample@tripbtoz.com,홍길동\n';
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'segment_template.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function deleteSegment(id, name) {
+  if(!confirm(`"${name}" 세그먼트를 삭제할까요?`)) return;
+  const { error } = await sb.from('segments').delete().eq('id', id);
+  if(error) { showToast('삭제 실패'); return; }
+  showToast('세그먼트 삭제됨');
+  renderSegmentList();
+}
