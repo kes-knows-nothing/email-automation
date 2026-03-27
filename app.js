@@ -57,10 +57,11 @@ function showView(name) {
   document.getElementById('tpl-name-input').style.display = isEditor ? 'block' : 'none';
   document.getElementById('topbar-nav').style.display = isEditor ? 'none' : 'flex';
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  const navMap = { list: 'nav-template', segment: 'nav-segment', sql: 'nav-sql' };
+  const navMap = { list: 'nav-template', dashboard: 'nav-dashboard', segment: 'nav-segment', sql: 'nav-sql' };
   if(navMap[name]) document.getElementById(navMap[name]).classList.add('active');
   currentView = name;
   if(name === 'list') renderTemplateList();
+  if(name === 'dashboard') renderDashboard();
   if(name === 'segment') renderSegmentList();
   if(name === 'sql') initSQLView();
 }
@@ -125,6 +126,7 @@ async function renderTemplateList() {
       <div class="tpl-actions">
         <button class="btn-secondary" onclick="editTemplate('${t.id}')">✏️ 편집</button>
         <button class="btn-secondary" onclick="duplicateTemplate('${t.id}')">복사</button>
+        <button class="btn-schedule" onclick="openScheduleModal('${t.id}','${(t.name||'제목 없는 템플릿').replace(/'/g,"\\'")}')">📅 발송 예약</button>
         <button class="btn-danger" onclick="deleteTemplate('${t.id}')">삭제</button>
       </div>
     </div>`;
@@ -259,7 +261,10 @@ function renderEditor(b, idx) {
     <textarea class="fi" rows="2" oninput="blocks[${idx}].data.n2=this.value;rp()">${esc(b.data.n2||'')}</textarea>`;
   if(t==='hotels') {
     const hs = b.data.hotels||[];
-    return `${hs.map((h,hi)=>`
+    const cartBtn = cartHotels.length > 0
+      ? `<button class="btn-load-cart" onclick="loadCartToBlock(${idx})">🏨 담아둔 호텔 불러오기 (${cartHotels.length}개)</button>`
+      : `<div class="cart-empty-hint">SQL 탭에서 hotel_id 포함 쿼리 실행 후 호텔을 담아오면 여기서 불러올 수 있어요</div>`;
+    return `${cartBtn}${hs.map((h,hi)=>`
       <div class="hotel-entry">
         <div class="hotel-entry-head"><span class="hotel-entry-label">카드 ${hi+1}</span>
           <button class="ba del" onclick="blocks[${idx}].data.hotels.splice(${hi},1);render();rp()">✕</button></div>
@@ -553,6 +558,303 @@ renderTemplateList();
 // ═══════════════════════════════════════════
 // SQL EDITOR
 // ═══════════════════════════════════════════
+async function searchHotels() {
+  const region = document.getElementById('hs-region').value.trim();
+  if(!region) { showToast('지역을 입력해주세요'); document.getElementById('hs-region').focus(); return; }
+
+  const year   = document.getElementById('hs-year').value;
+  const month  = parseInt(document.getElementById('hs-month').value);
+  const metric = document.querySelector('input[name="hs-metric"]:checked').value;
+  const limit  = document.getElementById('hs-limit').value;
+
+  // 날짜 범위
+  let dateFrom, dateTo;
+  if(month === 0) {
+    dateFrom = `${year}-01-01`;
+    dateTo   = `${parseInt(year)+1}-01-01`;
+  } else {
+    const mm = String(month).padStart(2, '0');
+    const lastDay = new Date(year, month, 0).getDate();
+    dateFrom = `${year}-${mm}-01`;
+    dateTo   = `${year}-${mm}-${lastDay}`;
+  }
+
+  let sql;
+  if(metric === 'booking') {
+    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail, COUNT(b.id) AS 예약건수
+FROM hotels h
+JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
+JOIN bookings b ON b.hotel_id = h.hotel_id
+WHERE h.city_kr LIKE '%${region}%'
+  AND b.check_in >= '${dateFrom}' AND b.check_in <= '${dateTo}'
+GROUP BY h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail
+ORDER BY 예약건수 DESC
+LIMIT ${limit};`;
+  } else {
+    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail,
+       CONCAT(FORMAT(SUM(p.fee_sell)/10000, 0), '만원') AS 매출
+FROM hotels h
+JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
+JOIN bookings b ON b.hotel_id = h.hotel_id
+JOIN checkouts c ON c.id = b.checkout_id
+JOIN payments p ON p.checkout_id = c.id
+WHERE h.city_kr LIKE '%${region}%'
+  AND b.check_in >= '${dateFrom}' AND b.check_in <= '${dateTo}'
+  AND p.currency = 'KRW'
+GROUP BY h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail
+ORDER BY SUM(p.fee_sell) DESC
+LIMIT ${limit};`;
+  }
+
+  // SQL 입력창에도 표시
+  document.getElementById('sql-input').value = sql;
+
+  const btn = document.querySelector('.hs-btn');
+  btn.disabled = true; btn.textContent = '검색 중...';
+  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-body').innerHTML = `<div class="sql-loading">
+    <div class="sql-loading-spinner"></div>
+    <div class="sql-loading-text">${region} 호텔 검색 중...</div>
+  </div>`;
+
+  try {
+    const res = await fetch('http://localhost:3001/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql }),
+    });
+    const data = await res.json();
+    if(data.error) {
+      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">오류</span>`;
+      document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">${data.error}</div>`;
+      return;
+    }
+    const label = month === 0 ? `${year}년` : `${year}년 ${month}월`;
+    showSQLResult(data, `<span class="sql-stat-ok">완료</span> ${region} · ${label} · ${data.total}개`);
+  } catch(e) {
+    document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
+    document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요.</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '검색';
+  }
+}
+
+const SQL_PRESETS = {
+  member: `-- 회원 광고수신 동의
+SELECT DISTINCT email
+FROM users
+WHERE mkt_email_agree = 1
+  AND status NOT IN ('STOP', 'DEL');`,
+
+  guest: `-- 비회원 광고수신 동의 (예약 시 광고수신 동의한 비회원)
+SELECT DISTINCT cd.origin_user_email AS email
+FROM tripbtoz_payment.checkout_detail cd
+WHERE cd.ad_policy_agreement_yn = 1
+  AND cd.origin_user_email IS NOT NULL
+  AND cd.origin_user_email != ''
+  AND cd.checkout_id IN (
+    SELECT id FROM tripbtoz.checkouts WHERE user_type = 'guest'
+  );`,
+
+  all: `-- 전체 합산 (회원 광고수신 동의 + 비회원 광고수신 동의)
+SELECT DISTINCT email FROM tripbtoz.users WHERE mkt_email_agree = 1 AND status NOT IN ('STOP', 'DEL')
+UNION
+SELECT DISTINCT cd.origin_user_email FROM tripbtoz_payment.checkout_detail cd
+WHERE cd.ad_policy_agreement_yn = 1
+  AND cd.origin_user_email IS NOT NULL
+  AND cd.origin_user_email != ''
+  AND cd.checkout_id IN (
+    SELECT id FROM tripbtoz.checkouts WHERE user_type = 'guest'
+  );`,
+};
+
+let sqlResultEmails = [];
+let cartHotels = []; // 담아둔 호텔
+
+function updateCartBadge() {
+  const badge = document.getElementById('hotel-cart-badge');
+  if(!badge) return;
+  if(cartHotels.length > 0) {
+    badge.textContent = `🏨 ${cartHotels.length}개 담김`;
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function loadPreset(key) {
+  document.getElementById('sql-input').value = SQL_PRESETS[key];
+  document.getElementById('sql-input').focus();
+}
+
+async function runPreset(key) {
+  const btn = document.getElementById('sql-run-btn');
+  btn.disabled = true; btn.textContent = '실행 중...';
+  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-body').innerHTML = `<div class="sql-loading">
+    <div class="sql-loading-spinner"></div>
+    <div class="sql-loading-text" id="sql-loading-text">불러오는 중...</div>
+  </div>`;
+
+  try {
+    const res = await fetch(`http://localhost:3001/api/preset/${key}`);
+    const data = await res.json();
+    if(data.error) {
+      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">오류</span>`;
+      document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">${data.error}</div>`;
+      return;
+    }
+
+    const cachedAgo = data.cached
+      ? `<span class="sql-cache-badge" title="클릭해서 새로고침" onclick="refreshPreset('${key}')">캐시 · ${formatAgo(data.cachedAt)} 전 기준 🔄</span>`
+      : `<span class="sql-cache-badge fresh">방금 조회</span>`;
+
+    showSQLResult(data, `<span class="sql-stat-ok">완료</span> ${data.total.toLocaleString()}행 · ${cachedAgo}`);
+  } catch(e) {
+    document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
+    document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요. <code>npm run dev</code> 실행 중인지 확인하세요.</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ 실행';
+  }
+}
+
+async function refreshPreset(key) {
+  await fetch(`http://localhost:3001/api/preset/${key}/cache`, { method: 'DELETE' });
+  runPreset(key);
+}
+
+function formatAgo(ts) {
+  const diff = Math.floor((Date.now() - ts) / 1000);
+  if(diff < 60) return `${diff}초`;
+  if(diff < 3600) return `${Math.floor(diff/60)}분`;
+  if(diff < 86400) return `${Math.floor(diff/3600)}시간`;
+  return `${Math.floor(diff/86400)}일`;
+}
+
+// ─── 공통 결과 렌더러 ───
+function showSQLResult(data, barHTML) {
+  // 이메일 컬럼 감지
+  const emailIdx = data.columns.findIndex(c => /^email$/i.test(c));
+  if(emailIdx !== -1) {
+    sqlResultEmails = data.rows.map(r => (r[emailIdx]||'').toString().trim()).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+    document.getElementById('sql-save-seg-wrap').style.display = 'block';
+  } else {
+    sqlResultEmails = [];
+    document.getElementById('sql-save-seg-wrap').style.display = 'none';
+  }
+
+  // hotel_id 컬럼 감지
+  const hotelIdIdx = data.columns.findIndex(c => /^hotel_id$/i.test(c));
+
+  let fullBar = barHTML;
+  if(emailIdx !== -1) fullBar += ` · 유효 이메일 <strong>${sqlResultEmails.length.toLocaleString()}개</strong>`;
+  document.getElementById('sql-result-bar').innerHTML = fullBar;
+  document.getElementById('sql-result-bar').appendChild(document.getElementById('sql-save-seg-wrap'));
+
+  if(data.rows.length === 0) {
+    document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">결과 없음</div>';
+    return;
+  }
+
+  if(hotelIdIdx !== -1) {
+    renderHotelTable(data, hotelIdIdx);
+  } else {
+    const thead = `<thead><tr>${data.columns.map(c => `<th>${c}</th>`).join('')}</tr></thead>`;
+    const tbody = `<tbody>${data.rows.slice(0,500).map(row =>
+      `<tr>${row.map(v => `<td>${v===null?'<span class="sql-null">NULL</span>':String(v)}</td>`).join('')}</tr>`
+    ).join('')}</tbody>`;
+    document.getElementById('sql-result-body').innerHTML = `<div class="sql-table-wrap"><table class="sql-table">${thead}${tbody}</table></div>`;
+  }
+}
+
+function renderHotelTable(data, hotelIdIdx) {
+  const cols = data.columns;
+  const nameIdx  = cols.findIndex(c => /^name_kr$/i.test(c)) !== -1 ? cols.findIndex(c => /^name_kr$/i.test(c)) : cols.findIndex(c => /^name$/i.test(c));
+  const areaIdx  = cols.findIndex(c => /^city_kr$/i.test(c)) !== -1 ? cols.findIndex(c => /^city_kr$/i.test(c)) : cols.findIndex(c => /city|area/i.test(c));
+  const imgIdx   = cols.findIndex(c => /^thumbnail$|^img$/i.test(c));
+  const priceIdx = cols.findIndex(c => /^price$|^min_price$|^fee_sell$/i.test(c));
+
+  window._hotelRows   = data.rows;
+  window._hotelColMap = { hotelIdIdx, nameIdx, areaIdx, imgIdx, priceIdx };
+
+  const thead = `<thead><tr>
+    <th style="width:36px;text-align:center"><input type="checkbox" id="hotel-check-all" onchange="toggleAllHotels(this)"></th>
+    ${cols.map(c => `<th>${c}</th>`).join('')}
+  </tr></thead>`;
+
+  const tbody = `<tbody>${data.rows.slice(0,200).map((row, ri) =>
+    `<tr class="hotel-row" onclick="toggleHotelRow(${ri})">
+      <td style="text-align:center"><input type="checkbox" class="hotel-check" data-idx="${ri}" onclick="event.stopPropagation()" onchange="onHotelCheck()"></td>
+      ${row.map(v => `<td>${v===null?'<span class="sql-null">NULL</span>':String(v)}</td>`).join('')}
+    </tr>`
+  ).join('')}</tbody>`;
+
+  document.getElementById('sql-result-body').innerHTML = `
+    <div class="sql-hotel-hint">🏨 hotel_id 감지 — 호텔을 선택해서 템플릿에 넣으세요 <span style="color:#bbb">(최대 4개)</span></div>
+    <div class="sql-hotel-toolbar">
+      <span id="hotel-select-count" style="font-size:12px;color:#888">선택된 호텔 없음</span>
+      <button class="sql-add-cart-btn" id="sql-add-cart-btn" onclick="addSelectedToCart()" disabled>🏨 담기</button>
+    </div>
+    <div class="sql-table-wrap"><table class="sql-table">${thead}${tbody}</table></div>`;
+}
+
+function toggleAllHotels(cb) {
+  const checks = document.querySelectorAll('.hotel-check');
+  let count = 0;
+  checks.forEach(c => { c.checked = cb.checked && count < 4; if(cb.checked) count++; });
+  onHotelCheck();
+}
+
+function toggleHotelRow(ri) {
+  const cb = document.querySelector(`.hotel-check[data-idx="${ri}"]`);
+  const checked = document.querySelectorAll('.hotel-check:checked');
+  if(!cb.checked && checked.length >= 4) { showToast('최대 4개까지 선택 가능해요'); return; }
+  cb.checked = !cb.checked;
+  onHotelCheck();
+}
+
+function onHotelCheck() {
+  const checked = document.querySelectorAll('.hotel-check:checked');
+  const count = checked.length;
+  const countEl = document.getElementById('hotel-select-count');
+  const btn = document.getElementById('sql-add-cart-btn');
+  if(countEl) countEl.textContent = count > 0 ? `${count}개 선택됨` : '선택된 호텔 없음';
+  if(btn) { btn.disabled = count === 0; btn.textContent = count > 0 ? `🏨 ${count}개 담기` : '🏨 담기'; }
+}
+
+function addSelectedToCart() {
+  const checked = document.querySelectorAll('.hotel-check:checked');
+  if(checked.length === 0) return;
+  const { hotelIdIdx, nameIdx, areaIdx, imgIdx, priceIdx } = window._hotelColMap;
+  const rows = window._hotelRows;
+  cartHotels = [];
+  checked.forEach(cb => {
+    const row = rows[parseInt(cb.dataset.idx)];
+    cartHotels.push({
+      name:  nameIdx  !== -1 ? String(row[nameIdx]  || '') : '',
+      area:  areaIdx  !== -1 ? String(row[areaIdx]  || '') : '',
+      price: priceIdx !== -1 ? String(row[priceIdx] || '') : '',
+      img:   imgIdx   !== -1 ? String(row[imgIdx]   || '') : '',
+      link:  `https://www.tripbtoz.com/hotel/${row[hotelIdIdx]}`,
+    });
+  });
+  updateCartBadge();
+  showToast(`🏨 ${cartHotels.length}개 호텔 담김 — 에디터에서 불러오세요`);
+}
+
+function loadCartToBlock(idx) {
+  if(cartHotels.length === 0) { showToast('담아둔 호텔이 없어요. SQL 탭에서 선택해주세요'); return; }
+  const current = blocks[idx].data.hotels || [];
+  const msg = current.length > 0
+    ? `현재 ${current.length}개 호텔을 담아둔 ${cartHotels.length}개로 교체할까요?`
+    : null;
+  if(!msg || confirm(msg)) {
+    blocks[idx].data.hotels = cartHotels.map(h => ({...h}));
+    render(); rp();
+    showToast(`${cartHotels.length}개 호텔 불러오기 완료`);
+  }
+}
+
 function initSQLView() {
   const input = document.getElementById('sql-input');
   if(input._sqlKeyBound) return;
@@ -577,7 +879,17 @@ async function runSQL() {
   const btn = document.getElementById('sql-run-btn');
   btn.disabled = true; btn.textContent = '실행 중...';
   document.getElementById('sql-result-bar').innerHTML = '';
-  document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">실행 중...</div>';
+  document.getElementById('sql-result-body').innerHTML = `<div class="sql-loading">
+    <div class="sql-loading-spinner"></div>
+    <div class="sql-loading-text" id="sql-loading-text">DB 접속 중...</div>
+  </div>`;
+  const loadingMsgs = ['DB 접속 중...', '쿼리 날리는 중...', '데이터 긁어오는 중...', '결과 정리하는 중...', '거의 다 됐어요...'];
+  let msgIdx = 0;
+  let msgTimer = setInterval(() => {
+    msgIdx = (msgIdx + 1) % loadingMsgs.length;
+    const el = document.getElementById('sql-loading-text');
+    if(el) el.textContent = loadingMsgs[msgIdx];
+  }, 800);
 
   try {
     const res = await fetch('http://localhost:3001/api/query', {
@@ -599,27 +911,34 @@ async function runSQL() {
       return;
     }
 
-    document.getElementById('sql-result-bar').innerHTML =
-      `<span class="sql-stat-ok">완료</span> ${data.total.toLocaleString()}행 · ${data.elapsed}ms`;
-
-    if(data.rows.length === 0) {
-      document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">결과 없음</div>';
-      return;
-    }
-
-    const thead = `<thead><tr>${data.columns.map(c => `<th>${c}</th>`).join('')}</tr></thead>`;
-    const tbody = `<tbody>${data.rows.map(row =>
-      `<tr>${row.map(v => `<td>${v === null ? '<span class="sql-null">NULL</span>' : String(v)}</td>`).join('')}</tr>`
-    ).join('')}</tbody>`;
-
-    document.getElementById('sql-result-body').innerHTML =
-      `<div class="sql-table-wrap"><table class="sql-table">${thead}${tbody}</table></div>`;
+    showSQLResult(data, `<span class="sql-stat-ok">완료</span> ${data.total.toLocaleString()}행 · ${data.elapsed}ms`);
   } catch(e) {
+    clearInterval(msgTimer);
     document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
     document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요. <code>npm run dev</code> 실행 중인지 확인하세요.</div>`;
   } finally {
+    clearInterval(msgTimer);
     btn.disabled = false; btn.textContent = '▶ 실행';
   }
+}
+
+function openSaveAsSegment() {
+  if(sqlResultEmails.length === 0) { showToast('저장할 이메일이 없습니다'); return; }
+  document.getElementById('save-seg-name').value = '';
+  document.getElementById('save-seg-count').textContent = `${sqlResultEmails.length.toLocaleString()}명`;
+  document.getElementById('save-seg-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('save-seg-name').focus(), 50);
+}
+
+function closeSaveAsSegment() { document.getElementById('save-seg-modal').style.display = 'none'; }
+
+async function confirmSaveAsSegment() {
+  const name = document.getElementById('save-seg-name').value.trim();
+  if(!name) { showToast('세그먼트 이름을 입력해주세요'); return; }
+  const { error } = await sb.from('segments').insert({ name, emails: sqlResultEmails, count: sqlResultEmails.length });
+  if(error) { showToast('저장 실패: ' + error.message); return; }
+  closeSaveAsSegment();
+  showToast(`"${name}" 세그먼트 저장됨 (${sqlResultEmails.length.toLocaleString()}명)`);
 }
 
 // ═══════════════════════════════════════════
@@ -802,4 +1121,172 @@ async function deleteSegment(id, name) {
   if(error) { showToast('삭제 실패'); return; }
   showToast('세그먼트 삭제됨');
   renderSegmentList();
+}
+
+// ═══════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════
+async function renderDashboard() {
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: pending } = await sb.from('email_schedules')
+    .select('*').eq('status', 'pending').order('scheduled_at', { ascending: true });
+
+  const { data: sent } = await sb.from('email_schedules')
+    .select('*').eq('status', 'sent')
+    .gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false });
+
+  renderDashSection('dash-pending-list', pending || [], 'pending');
+  renderDashSection('dash-sent-list', sent || [], 'sent');
+
+  const total = (pending||[]).length + (sent||[]).length;
+  document.getElementById('dash-sub').textContent = `대기 ${(pending||[]).length}건 · 완료 ${(sent||[]).length}건 (최근 2주)`;
+}
+
+const SCHEDULE_TYPE_LABEL = { once: '1회성', daily: '매일', weekly: '매주', biweekly: '격주', monthly: '매월' };
+const WEEKDAY_LABEL = ['일','월','화','수','목','금','토'];
+
+function fmtScheduleTime(s) {
+  if(s.schedule_type === 'once') {
+    return s.scheduled_at
+      ? new Date(s.scheduled_at).toLocaleString('ko-KR', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
+      : '-';
+  }
+  if(s.schedule_type === 'daily') return `매일 ${s.send_time}`;
+  if(s.schedule_type === 'weekly') return `매주 ${WEEKDAY_LABEL[s.weekday||0]}요일 ${s.send_time}`;
+  if(s.schedule_type === 'biweekly') return `격주 ${WEEKDAY_LABEL[s.weekday||0]}요일 ${s.send_time}`;
+  if(s.schedule_type === 'monthly') return `매월 ${s.day_of_month}일 ${s.send_time}`;
+  return '-';
+}
+
+function renderDashSection(containerId, list, type) {
+  const el = document.getElementById(containerId);
+  if(list.length === 0) {
+    el.innerHTML = `<div class="dash-empty">${type === 'pending' ? '예약된 발송이 없어요' : '최근 2주 발송 내역이 없어요'}</div>`;
+    return;
+  }
+  el.innerHTML = list.map(s => {
+    const timeStr = type === 'sent'
+      ? (s.sent_at ? new Date(s.sent_at).toLocaleString('ko-KR',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '-')
+      : fmtScheduleTime(s);
+    const badge = `<span class="dash-type-badge dash-type-${s.schedule_type}">${SCHEDULE_TYPE_LABEL[s.schedule_type]||s.schedule_type}</span>`;
+    const actions = type === 'pending'
+      ? `<button class="btn-danger btn-sm" onclick="cancelSchedule('${s.id}')">취소</button>
+         <button class="btn-schedule btn-sm" onclick="markSent('${s.id}')">발송 완료 처리</button>`
+      : '';
+    return `<div class="dash-card">
+      <div class="dash-card-left">
+        ${badge}
+        <div class="dash-card-tpl">${s.template_name}</div>
+        <div class="dash-card-seg">${s.segment_name ? '→ ' + s.segment_name : '세그먼트 없음'}</div>
+      </div>
+      <div class="dash-card-right">
+        <div class="dash-card-time">${timeStr}</div>
+        <div class="dash-card-actions">${actions}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function cancelSchedule(id) {
+  if(!confirm('예약을 취소할까요?')) return;
+  const { error } = await sb.from('email_schedules').update({ status: 'cancelled' }).eq('id', id);
+  if(error) { showToast('취소 실패'); return; }
+  showToast('예약 취소됨');
+  renderDashboard();
+}
+
+async function markSent(id) {
+  if(!confirm('발송 완료로 처리할까요?')) return;
+  const { error } = await sb.from('email_schedules')
+    .update({ status: 'sent', sent_at: new Date().toISOString() }).eq('id', id);
+  if(error) { showToast('처리 실패'); return; }
+  showToast('발송 완료 처리됨');
+  renderDashboard();
+}
+
+// ═══════════════════════════════════════════
+// SCHEDULE MODAL
+// ═══════════════════════════════════════════
+let _schedTplId = null;
+
+async function openScheduleModal(tplId, tplName) {
+  _schedTplId = tplId;
+  document.getElementById('sch-tpl-name').textContent = tplName;
+
+  // 세그먼트 목록 로드
+  const { data: segs } = await sb.from('segments').select('id,name').order('created_at', { ascending: false });
+  const sel = document.getElementById('sch-segment');
+  sel.innerHTML = '<option value="">세그먼트 선택...</option>' +
+    (segs||[]).map(s => `<option value="${s.id}" data-name="${s.name}">${s.name}</option>`).join('');
+
+  // 매월 일수 채우기
+  const daysSel = document.getElementById('sch-monthly-day');
+  if(!daysSel.options.length) {
+    daysSel.innerHTML = Array.from({length:31},(_,i)=>`<option value="${i+1}">${i+1}일</option>`).join('');
+  }
+
+  // 1회성 기본값: 내일 오전 9시
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1); tomorrow.setHours(9,0,0,0);
+  document.getElementById('sch-once-dt').value = tomorrow.toISOString().slice(0,16);
+
+  // 타입 초기화
+  document.querySelector('input[name="sch-type"][value="once"]').checked = true;
+  onSchTypeChange();
+
+  document.getElementById('schedule-modal').style.display = 'flex';
+}
+
+function closeScheduleModal() {
+  document.getElementById('schedule-modal').style.display = 'none';
+  _schedTplId = null;
+}
+
+function onSchTypeChange() {
+  const type = document.querySelector('input[name="sch-type"]:checked')?.value;
+  document.getElementById('sch-once-fields').style.display = type === 'once' ? '' : 'none';
+  document.getElementById('sch-daily-fields').style.display = type === 'daily' ? '' : 'none';
+  document.getElementById('sch-weekly-fields').style.display = (type === 'weekly' || type === 'biweekly') ? '' : 'none';
+  document.getElementById('sch-monthly-fields').style.display = type === 'monthly' ? '' : 'none';
+}
+
+async function saveSchedule() {
+  const type = document.querySelector('input[name="sch-type"]:checked')?.value;
+  const segSel = document.getElementById('sch-segment');
+  const segId = segSel.value || null;
+  const segName = segId ? segSel.options[segSel.selectedIndex].dataset.name : null;
+  const tplName = document.getElementById('sch-tpl-name').textContent;
+
+  if(!_schedTplId) return;
+
+  const payload = {
+    template_id: _schedTplId,
+    template_name: tplName,
+    segment_id: segId,
+    segment_name: segName,
+    schedule_type: type,
+    status: 'pending',
+  };
+
+  if(type === 'once') {
+    const dt = document.getElementById('sch-once-dt').value;
+    if(!dt) { showToast('발송 일시를 선택해주세요'); return; }
+    payload.scheduled_at = new Date(dt).toISOString();
+  } else if(type === 'daily') {
+    payload.send_time = document.getElementById('sch-daily-time').value;
+  } else if(type === 'weekly' || type === 'biweekly') {
+    const wd = document.querySelector('input[name="sch-weekday"]:checked');
+    if(!wd) { showToast('요일을 선택해주세요'); return; }
+    payload.weekday = parseInt(wd.value);
+    payload.send_time = document.getElementById('sch-weekly-time').value;
+  } else if(type === 'monthly') {
+    payload.day_of_month = parseInt(document.getElementById('sch-monthly-day').value);
+    payload.send_time = document.getElementById('sch-monthly-time').value;
+  }
+
+  const { error } = await sb.from('email_schedules').insert(payload);
+  if(error) { showToast('저장 실패: ' + error.message); return; }
+
+  closeScheduleModal();
+  showToast('발송 예약이 저장되었어요');
 }
