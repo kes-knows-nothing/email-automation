@@ -171,9 +171,16 @@
   <div class="hotel-search-panel">
     <div class="hotel-search-title">🏨 호텔 검색</div>
     <div class="hotel-search-row">
-      <div class="hs-field">
+      <div class="hs-field" style="position:relative">
         <label class="hs-label">지역</label>
-        <input class="hs-input" id="hs-region" placeholder="예: 여수, 제주, 홍천" onkeydown="if(event.key==='Enter')searchHotels()">
+        <div class="hs-city-wrap" id="hs-city-wrap">
+          <input class="hs-input" id="hs-region" placeholder="도시명 검색..." autocomplete="off"
+            oninput="onCityInput(this.value)"
+            onkeydown="onCityKeydown(event)"
+            onfocus="onCityInput(this.value)">
+          <button class="hs-city-clear" id="hs-city-clear" onclick="clearCity()" style="display:none">✕</button>
+        </div>
+        <div class="hs-city-dropdown" id="hs-city-dropdown" style="display:none"></div>
       </div>
       <div class="hs-field">
         <label class="hs-label">기준 연도</label>

@@ -69,6 +69,23 @@ async function runQuery(sql) {
   }
 }
 
+// 도시 검색 자동완성
+app.get('/api/cities', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.execute(
+      `SELECT DISTINCT city_kr FROM hotels WHERE city_kr LIKE ? AND city_kr IS NOT NULL AND city_kr != '' ORDER BY city_kr LIMIT 20`,
+      [`%${q}%`]
+    );
+    res.json(rows.map(r => r.city_kr));
+  } catch(err) {
+    res.status(400).json({ error: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
 // 일반 쿼리
 app.post('/api/query', async (req, res) => {
   const { sql } = req.body;

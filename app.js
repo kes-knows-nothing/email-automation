@@ -556,10 +556,92 @@ function showToast(msg) {
 renderTemplateList();
 
 // ═══════════════════════════════════════════
+// CITY SEARCH DROPDOWN
+// ═══════════════════════════════════════════
+let cityDebounce = null;
+let cityActiveIdx = -1;
+let citySelected = '';
+
+async function onCityInput(q) {
+  citySelected = '';
+  document.getElementById('hs-city-clear').style.display = q ? 'block' : 'none';
+  clearTimeout(cityDebounce);
+  if(!q) { hideCityDropdown(); return; }
+  cityDebounce = setTimeout(async () => {
+    try {
+      const res = await fetch(`http://localhost:3001/api/cities?q=${encodeURIComponent(q)}`);
+      const cities = await res.json();
+      renderCityDropdown(cities, q);
+    } catch { hideCityDropdown(); }
+  }, 180);
+}
+
+function renderCityDropdown(cities, q) {
+  const dd = document.getElementById('hs-city-dropdown');
+  cityActiveIdx = -1;
+  if(!cities.length) {
+    dd.innerHTML = `<div class="hs-city-empty">결과 없음</div>`;
+    dd.style.display = 'block';
+    return;
+  }
+  const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi');
+  dd.innerHTML = cities.map((c, i) =>
+    `<div class="hs-city-item" data-val="${c}" onmousedown="selectCity('${c}')">${c.replace(re, '<b>$1</b>')}</div>`
+  ).join('');
+  dd.style.display = 'block';
+}
+
+function hideCityDropdown() {
+  document.getElementById('hs-city-dropdown').style.display = 'none';
+  cityActiveIdx = -1;
+}
+
+function selectCity(val) {
+  citySelected = val;
+  document.getElementById('hs-region').value = val;
+  document.getElementById('hs-city-clear').style.display = 'block';
+  hideCityDropdown();
+}
+
+function clearCity() {
+  citySelected = '';
+  document.getElementById('hs-region').value = '';
+  document.getElementById('hs-city-clear').style.display = 'none';
+  hideCityDropdown();
+  document.getElementById('hs-region').focus();
+}
+
+function onCityKeydown(e) {
+  const dd = document.getElementById('hs-city-dropdown');
+  const items = dd.querySelectorAll('.hs-city-item');
+  if(e.key === 'ArrowDown') {
+    e.preventDefault();
+    cityActiveIdx = Math.min(cityActiveIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('active', i === cityActiveIdx));
+  } else if(e.key === 'ArrowUp') {
+    e.preventDefault();
+    cityActiveIdx = Math.max(cityActiveIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle('active', i === cityActiveIdx));
+  } else if(e.key === 'Enter') {
+    if(cityActiveIdx >= 0 && items[cityActiveIdx]) {
+      selectCity(items[cityActiveIdx].dataset.val);
+    } else {
+      searchHotels();
+    }
+  } else if(e.key === 'Escape') {
+    hideCityDropdown();
+  }
+}
+
+document.addEventListener('click', e => {
+  if(!document.getElementById('hs-city-wrap')?.contains(e.target)) hideCityDropdown();
+});
+
+// ═══════════════════════════════════════════
 // SQL EDITOR
 // ═══════════════════════════════════════════
 async function searchHotels() {
-  const region = document.getElementById('hs-region').value.trim();
+  const region = (citySelected || document.getElementById('hs-region').value).trim();
   if(!region) { showToast('지역을 입력해주세요'); document.getElementById('hs-region').focus(); return; }
 
   const year   = document.getElementById('hs-year').value;

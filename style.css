@@ -251,6 +251,13 @@ input[type=file].fi-file { display: none; }
 .hs-input:focus { border-color: rgba(167,139,250,0.5); box-shadow: 0 0 0 2px var(--glow); }
 .hs-input::placeholder { color: var(--text-faint); }
 .hs-select { height: 32px; padding: 0 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; outline: none; background: var(--bg3); color: var(--text); cursor: pointer; }
+.hs-city-wrap { position: relative; display: inline-flex; align-items: center; }
+.hs-city-clear { position: absolute; right: 8px; background: none; border: none; color: var(--text-faint); cursor: pointer; font-size: 11px; padding: 0; line-height: 1; }
+.hs-city-clear:hover { color: var(--text); }
+.hs-city-dropdown { position: absolute; top: calc(100% + 4px); left: 0; width: 200px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); z-index: 100; max-height: 240px; overflow-y: auto; }
+.hs-city-item { padding: 8px 12px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+.hs-city-item:hover, .hs-city-item.active { background: var(--bg3); color: var(--text); }
+.hs-city-empty { padding: 12px; font-size: 12px; color: var(--text-faint); text-align: center; }
 .hs-radio-group { display: flex; gap: 10px; height: 32px; align-items: center; }
 .hs-radio { font-size: 12px; color: var(--text-dim); cursor: pointer; display: flex; align-items: center; gap: 4px; }
 .hs-btn { height: 32px; padding: 0 20px; background: var(--accent); color: #0d0c14; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.22s cubic-bezier(0.16,1,0.3,1); white-space: nowrap; }
