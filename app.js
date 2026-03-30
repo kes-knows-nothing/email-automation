@@ -1332,6 +1332,84 @@ function onSchTypeChange() {
   document.getElementById('sch-monthly-fields').style.display = type === 'monthly' ? '' : 'none';
 }
 
+async function sendNow() {
+  const subject = document.getElementById('sch-subject').value.trim();
+  const segSel = document.getElementById('sch-segment');
+  const segId = segSel.value;
+  const segName = segId ? segSel.options[segSel.selectedIndex].dataset.name : '';
+
+  if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
+  if(!segId) { showToast('세그먼트를 선택해주세요'); return; }
+  if(!_schedTplId) return;
+
+  const tplName = document.getElementById('sch-tpl-name').textContent;
+  if(!confirm(`"${tplName}" 을 "${segName}" 에게 지금 바로 발송할까요?`)) return;
+
+  closeScheduleModal();
+  openSendProgress('발송 중...');
+
+  try {
+    const res = await fetch('http://localhost:3001/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templateId: _schedTplId, segmentId: segId, subject }),
+    });
+    const { jobId, error } = await res.json();
+    if(error) { setSendProgressError(error); return; }
+    pollSendJob(jobId);
+  } catch(e) {
+    setSendProgressError('서버 연결 실패: ' + e.message);
+  }
+}
+
+function openSendProgress(title) {
+  document.getElementById('send-progress-title').textContent = title;
+  document.getElementById('send-progress-spinner').style.display = 'block';
+  document.getElementById('send-progress-text').textContent = '준비 중...';
+  document.getElementById('send-progress-footer').style.display = 'none';
+  document.getElementById('send-progress-modal').style.display = 'flex';
+}
+
+function closeSendProgress() {
+  document.getElementById('send-progress-modal').style.display = 'none';
+}
+
+function setSendProgressError(msg) {
+  document.getElementById('send-progress-title').textContent = '발송 실패';
+  document.getElementById('send-progress-spinner').style.display = 'none';
+  document.getElementById('send-progress-text').innerHTML = `<span style="color:#e24b4a">${msg}</span>`;
+  document.getElementById('send-progress-footer').style.display = 'flex';
+}
+
+async function pollSendJob(jobId) {
+  const poll = async () => {
+    try {
+      const res = await fetch(`http://localhost:3001/api/send-job/${jobId}`);
+      const job = await res.json();
+
+      document.getElementById('send-progress-text').innerHTML =
+        `총 ${job.total.toLocaleString()}명 중<br>
+         ✅ 발송 완료: <b>${job.sent.toLocaleString()}명</b><br>
+         ❌ 실패: ${job.failed}명<br>
+         🚫 수신거부 제외: ${job.filtered}명`;
+
+      if(job.status === 'done') {
+        document.getElementById('send-progress-title').textContent = '발송 완료';
+        document.getElementById('send-progress-spinner').style.display = 'none';
+        document.getElementById('send-progress-footer').style.display = 'flex';
+        renderDashboard();
+      } else if(job.status === 'error') {
+        setSendProgressError(job.errorMessage || '알 수 없는 오류');
+      } else {
+        setTimeout(poll, 2000);
+      }
+    } catch(e) {
+      setTimeout(poll, 3000);
+    }
+  };
+  poll();
+}
+
 async function saveSchedule() {
   const type = document.querySelector('input[name="sch-type"]:checked')?.value;
   const segSel = document.getElementById('sch-segment');
@@ -1341,11 +1419,15 @@ async function saveSchedule() {
 
   if(!_schedTplId) return;
 
+  const subject = document.getElementById('sch-subject').value.trim();
+  if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
+
   const payload = {
     template_id: _schedTplId,
     template_name: tplName,
     segment_id: segId,
     segment_name: segName,
+    subject,
     schedule_type: type,
     status: 'pending',
   };

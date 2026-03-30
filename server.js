@@ -1,10 +1,38 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
+const crypto = require('crypto');
+const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ── SES ──
+const ses = new SESClient({
+  region: process.env.AWS_REGION || 'ap-northeast-2',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  },
+});
+
+// ── Supabase ──
+const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// ── 수신거부 토큰 (unsubscribe.html과 동일한 시크릿) ──
+const UNSUB_SECRET = 'tripbtoz-unsub-2025';
+function generateUnsubToken(email) {
+  return crypto.createHmac('sha256', UNSUB_SECRET)
+    .update(email.toLowerCase().trim())
+    .digest('base64url');
+}
+function getUnsubUrl(email) {
+  const base = process.env.UNSUB_BASE_URL || 'http://localhost:3000/unsubscribe.html';
+  return `${base}?e=${Buffer.from(email).toString('base64')}&t=${generateUnsubToken(email)}`;
+}
 
 const DB = {
   host: '127.0.0.1',
@@ -122,5 +150,133 @@ app.delete('/api/preset/:key/cache', async (req, res) => {
   delete cache[key];
   res.json({ ok: true });
 });
+
+// ═══════════════════════════════════════════
+// EMAIL SEND
+// ═══════════════════════════════════════════
+
+// 발송 진행 상태 인메모리 저장
+const sendJobs = {};
+
+async function executeSend(jobId, { templateId, segmentId, subject, fromName, scheduleId }) {
+  const job = sendJobs[jobId];
+  job.status = 'running';
+
+  try {
+    // 1. 템플릿 HTML 가져오기
+    const { data: tpl, error: tplErr } = await sb.from('templates').select('html,name').eq('id', templateId).single();
+    if(tplErr || !tpl) throw new Error('템플릿을 찾을 수 없습니다');
+
+    // 2. 세그먼트 이메일 목록
+    let emails = [];
+    if(segmentId) {
+      const { data: seg, error: segErr } = await sb.from('segments').select('emails').eq('id', segmentId).single();
+      if(segErr || !seg) throw new Error('세그먼트를 찾을 수 없습니다');
+      emails = seg.emails || [];
+    }
+
+    // 3. 수신거부 필터링
+    const { data: unsubs } = await sb.from('unsubscribers').select('email');
+    const unsubSet = new Set((unsubs || []).map(u => u.email.toLowerCase()));
+    const filtered = emails.filter(e => e && !unsubSet.has(e.toLowerCase()));
+
+    job.total = filtered.length;
+    job.filtered = emails.length - filtered.length;
+
+    const from = `${fromName || process.env.SES_FROM_NAME || '트립비토즈'} <${process.env.SES_FROM_EMAIL}>`;
+
+    // 4. 10개씩 배치 발송
+    for(let i = 0; i < filtered.length; i += 10) {
+      const batch = filtered.slice(i, i + 10);
+      await Promise.all(batch.map(async email => {
+        const unsubUrl = getUnsubUrl(email);
+        const html = tpl.html.replace(/\{\{UNSUB_URL\}\}/g, unsubUrl);
+        try {
+          await ses.send(new SendEmailCommand({
+            Source: from,
+            Destination: { ToAddresses: [email] },
+            Message: {
+              Subject: { Data: subject, Charset: 'UTF-8' },
+              Body: { Html: { Data: html, Charset: 'UTF-8' } },
+            },
+          }));
+          job.sent++;
+        } catch(e) {
+          job.failed++;
+          job.errors.push({ email, error: e.message });
+        }
+      }));
+      // SES 기본 14/s 한도 여유 있게 배치 간 지연
+      if(i + 10 < filtered.length) await new Promise(r => setTimeout(r, 800));
+    }
+
+    // 5. 스케줄 상태 업데이트
+    if(scheduleId) {
+      await sb.from('email_schedules').update({
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        sent_count: job.sent,
+      }).eq('id', scheduleId);
+    }
+
+    job.status = 'done';
+  } catch(e) {
+    job.status = 'error';
+    job.errorMessage = e.message;
+    console.error('[send]', e.message);
+  }
+}
+
+// 발송 시작
+app.post('/api/send', async (req, res) => {
+  const { templateId, segmentId, subject, fromName, scheduleId } = req.body;
+  if(!templateId || !segmentId || !subject) {
+    return res.status(400).json({ error: 'templateId, segmentId, subject 필수' });
+  }
+  if(!process.env.AWS_ACCESS_KEY_ID) {
+    return res.status(400).json({ error: 'AWS 자격증명이 .env에 설정되지 않았습니다' });
+  }
+  const jobId = `job_${Date.now()}`;
+  sendJobs[jobId] = { status: 'running', sent: 0, failed: 0, total: 0, filtered: 0, errors: [] };
+  executeSend(jobId, { templateId, segmentId, subject, fromName, scheduleId });
+  res.json({ jobId });
+});
+
+// 발송 진행 상황 조회
+app.get('/api/send-job/:jobId', (req, res) => {
+  const job = sendJobs[req.params.jobId];
+  if(!job) return res.status(404).json({ error: 'job not found' });
+  res.json(job);
+});
+
+// ═══════════════════════════════════════════
+// SCHEDULE EXECUTOR (1분마다 due 스케줄 처리)
+// ═══════════════════════════════════════════
+async function runDueSchedules() {
+  try {
+    const now = new Date();
+    const { data: dues } = await sb.from('email_schedules')
+      .select('*').eq('status', 'pending').eq('schedule_type', 'once')
+      .lte('scheduled_at', now.toISOString());
+
+    for(const s of (dues || [])) {
+      if(!s.template_id || !s.segment_id) continue;
+      const subject = s.subject || `[트립비토즈] ${s.template_name || '이메일'}`;
+      const jobId = `sched_${s.id}`;
+      sendJobs[jobId] = { status: 'running', sent: 0, failed: 0, total: 0, filtered: 0, errors: [] };
+      console.log(`[scheduler] 발송 시작: ${s.template_name} → ${s.segment_name}`);
+      executeSend(jobId, {
+        templateId: s.template_id,
+        segmentId: s.segment_id,
+        subject,
+        scheduleId: s.id,
+      });
+    }
+  } catch(e) {
+    console.error('[scheduler]', e.message);
+  }
+}
+
+setInterval(runDueSchedules, 60 * 1000);
 
 app.listen(3001, () => console.log('API server running on http://localhost:3001'));
