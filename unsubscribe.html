@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>수신 거부 — 트립비토즈</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Malgun Gothic','맑은 고딕',Helvetica,sans-serif;
+  background: #f5f5f5; color: #222;
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+}
+.card {
+  background: #fff; border-radius: 16px; padding: 48px 40px;
+  max-width: 460px; width: 100%; text-align: center;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+}
+.logo { margin-bottom: 32px; }
+.logo img { height: 32px; }
+.icon { font-size: 48px; margin-bottom: 20px; }
+h1 { font-size: 20px; font-weight: 700; color: #181818; margin-bottom: 10px; }
+p { font-size: 14px; color: #666; line-height: 1.7; }
+.email-chip {
+  display: inline-block; background: #f0ebff; color: #7B3CFF;
+  font-size: 13px; font-weight: 600; padding: 6px 16px;
+  border-radius: 20px; margin: 16px 0;
+}
+.btn {
+  display: inline-block; margin-top: 24px; padding: 12px 32px;
+  background: #7B3CFF; color: #fff; border-radius: 8px;
+  font-size: 14px; font-weight: 600; text-decoration: none;
+  cursor: pointer; border: none;
+}
+.btn:hover { background: #6930e0; }
+.btn.secondary {
+  background: #fff; color: #555;
+  border: 1px solid #e0e0e0; margin-left: 8px;
+}
+.btn.secondary:hover { border-color: #7B3CFF; color: #7B3CFF; }
+.error { color: #e24b4a; font-size: 13px; margin-top: 12px; }
+.spinner {
+  width: 36px; height: 36px; border: 3px solid #f0ebff;
+  border-top-color: #7B3CFF; border-radius: 50%;
+  animation: spin 0.8s linear infinite; margin: 0 auto 20px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="card" id="card">
+  <div class="logo">
+    <svg width="120" height="28" viewBox="0 0 120 28" fill="none">
+      <rect width="28" height="28" rx="6" fill="#7B3CFF"/>
+      <path d="M7 14h14M14 7v14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+      <text x="36" y="20" font-family="'Malgun Gothic',Helvetica,sans-serif" font-size="14" font-weight="700" fill="#181818">트립비토즈</text>
+    </svg>
+  </div>
+  <div class="spinner" id="spinner"></div>
+  <p id="loading-msg" style="color:#999">처리 중...</p>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://vihwzugbrulsxbembkby.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpaHd6dWdicnVsc3hiZW1ia2J5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ1MTI1NjAsImV4cCI6MjA5MDA4ODU2MH0.Gnh1verFEqdCD77puXRL3CA3vAu1oaW7DGxxyzlqv5U';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const UNSUB_SECRET = 'tripbtoz-unsub-2025';
+
+async function verifyToken(email, token) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(UNSUB_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(email.toLowerCase().trim()));
+  const expected = btoa(String.fromCharCode(...new Uint8Array(sig)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  return expected === token;
+}
+
+function showSuccess(email) {
+  document.getElementById('card').innerHTML = `
+    <div class="logo">
+      <svg width="120" height="28" viewBox="0 0 120 28" fill="none">
+        <rect width="28" height="28" rx="6" fill="#7B3CFF"/>
+        <path d="M7 14h14M14 7v14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="36" y="20" font-family="'Malgun Gothic',Helvetica,sans-serif" font-size="14" font-weight="700" fill="#181818">트립비토즈</text>
+      </svg>
+    </div>
+    <div class="icon">✅</div>
+    <h1>수신 거부 완료</h1>
+    <div class="email-chip">${email}</div>
+    <p>더 이상 마케팅 이메일을 받지 않습니다.<br>도움이 필요하시면 고객센터(02-711-6880)로 문의해주세요.</p>
+    <a href="https://www.tripbtoz.com/" class="btn secondary" style="margin-top:24px">트립비토즈 홈으로</a>
+  `;
+}
+
+function showAlreadyDone(email) {
+  document.getElementById('card').innerHTML = `
+    <div class="logo">
+      <svg width="120" height="28" viewBox="0 0 120 28" fill="none">
+        <rect width="28" height="28" rx="6" fill="#7B3CFF"/>
+        <path d="M7 14h14M14 7v14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="36" y="20" font-family="'Malgun Gothic',Helvetica,sans-serif" font-size="14" font-weight="700" fill="#181818">트립비토즈</text>
+      </svg>
+    </div>
+    <div class="icon">ℹ️</div>
+    <h1>이미 처리된 요청입니다</h1>
+    <div class="email-chip">${email}</div>
+    <p>이미 수신거부 처리된 이메일 주소입니다.</p>
+    <a href="https://www.tripbtoz.com/" class="btn secondary" style="margin-top:24px">트립비토즈 홈으로</a>
+  `;
+}
+
+function showError(msg) {
+  document.getElementById('card').innerHTML = `
+    <div class="icon">❌</div>
+    <h1>처리할 수 없습니다</h1>
+    <p class="error">${msg}</p>
+    <p style="margin-top:12px;font-size:13px;color:#888">도움이 필요하시면 고객센터(02-711-6880)로 문의해주세요.</p>
+  `;
+}
+
+async function init() {
+  const params = new URLSearchParams(location.search);
+  const eParam = params.get('e');
+  const token = params.get('t');
+
+  if(!eParam || !token) {
+    showError('잘못된 링크입니다.');
+    return;
+  }
+
+  let email;
+  try {
+    email = atob(eParam);
+  } catch {
+    showError('잘못된 링크입니다.');
+    return;
+  }
+
+  const valid = await verifyToken(email, token);
+  if(!valid) {
+    showError('유효하지 않은 링크입니다. 이메일에서 직접 수신거부 링크를 눌러주세요.');
+    return;
+  }
+
+  // 이미 거부 여부 확인
+  const { data: existing } = await sb.from('unsubscribers').select('email').eq('email', email).maybeSingle();
+  if(existing) {
+    showAlreadyDone(email);
+    return;
+  }
+
+  // 수신거부 등록
+  const { error } = await sb.from('unsubscribers').insert({
+    email,
+    unsubscribed_at: new Date().toISOString(),
+    source_template: params.get('tpl') || null
+  });
+
+  if(error) {
+    showError('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    console.error(error);
+    return;
+  }
+
+  showSuccess(email);
+}
+
+init();
+</script>
+</body>
+</html>
