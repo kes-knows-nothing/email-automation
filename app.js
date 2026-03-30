@@ -1332,7 +1332,7 @@ function onSchTypeChange() {
   document.getElementById('sch-monthly-fields').style.display = type === 'monthly' ? '' : 'none';
 }
 
-async function sendNow() {
+async function sendNow(dryRun = false) {
   const subject = document.getElementById('sch-subject').value.trim();
   const segSel = document.getElementById('sch-segment');
   const segId = segSel.value;
@@ -1343,20 +1343,20 @@ async function sendNow() {
   if(!_schedTplId) return;
 
   const tplName = document.getElementById('sch-tpl-name').textContent;
-  if(!confirm(`"${tplName}" 을 "${segName}" 에게 지금 바로 발송할까요?`)) return;
+  if(!dryRun && !confirm(`"${tplName}" 을 "${segName}" 에게 지금 바로 발송할까요?`)) return;
 
   closeScheduleModal();
-  openSendProgress('발송 중...');
+  openSendProgress(dryRun ? '🧪 테스트 발송 시뮬레이션 중...' : '발송 중...');
 
   try {
     const res = await fetch('http://localhost:3001/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ templateId: _schedTplId, segmentId: segId, subject }),
+      body: JSON.stringify({ templateId: _schedTplId, segmentId: segId, subject, dryRun }),
     });
     const { jobId, error } = await res.json();
     if(error) { setSendProgressError(error); return; }
-    pollSendJob(jobId);
+    pollSendJob(jobId, dryRun);
   } catch(e) {
     setSendProgressError('서버 연결 실패: ' + e.message);
   }
@@ -1381,23 +1381,41 @@ function setSendProgressError(msg) {
   document.getElementById('send-progress-footer').style.display = 'flex';
 }
 
-async function pollSendJob(jobId) {
+async function pollSendJob(jobId, dryRun = false) {
   const poll = async () => {
     try {
       const res = await fetch(`http://localhost:3001/api/send-job/${jobId}`);
       const job = await res.json();
 
-      document.getElementById('send-progress-text').innerHTML =
-        `총 ${job.total.toLocaleString()}명 중<br>
-         ✅ 발송 완료: <b>${job.sent.toLocaleString()}명</b><br>
-         ❌ 실패: ${job.failed}명<br>
-         🚫 수신거부 제외: ${job.filtered}명`;
+      if(!dryRun) {
+        document.getElementById('send-progress-text').innerHTML =
+          `총 ${job.total.toLocaleString()}명 중<br>
+           ✅ 발송 완료: <b>${job.sent.toLocaleString()}명</b><br>
+           ❌ 실패: ${job.failed}명<br>
+           🚫 수신거부 제외: ${job.filtered}명`;
+      }
 
       if(job.status === 'done') {
-        document.getElementById('send-progress-title').textContent = '발송 완료';
         document.getElementById('send-progress-spinner').style.display = 'none';
         document.getElementById('send-progress-footer').style.display = 'flex';
-        renderDashboard();
+
+        if(dryRun && job.preview) {
+          const p = job.preview;
+          document.getElementById('send-progress-title').textContent = '🧪 테스트 결과';
+          document.getElementById('send-progress-text').innerHTML = `
+            <div style="text-align:left;font-size:12px;line-height:2">
+              <b>발신자</b><br><span style="color:#888">${p.from}</span><br>
+              <b>제목</b><br><span style="color:#888">${p.subject}</span><br>
+              <b>총 수신자</b><br><span style="color:#7B3CFF;font-size:15px;font-weight:700">${job.total.toLocaleString()}명</span>
+              ${job.filtered ? `<span style="color:#bbb;font-size:11px"> (수신거부 ${job.filtered}명 제외)</span>` : ''}<br>
+              <b>수신거부 링크</b><br><span style="color:#888;font-size:11px;word-break:break-all">${p.sampleUnsubUrl}</span><br>
+              <b>{{UNSUB_URL}} 치환</b> ${p.hasUnsubPlaceholder ? '✅ 있음' : '⚠️ 없음 (푸터 블록 확인 필요)'}<br>
+              ${p.sampleEmails.length ? `<b>발송 대상 샘플</b><br><span style="color:#888">${p.sampleEmails.join('<br>')}</span>` : ''}
+            </div>`;
+        } else {
+          document.getElementById('send-progress-title').textContent = '발송 완료';
+          renderDashboard();
+        }
       } else if(job.status === 'error') {
         setSendProgressError(job.errorMessage || '알 수 없는 오류');
       } else {

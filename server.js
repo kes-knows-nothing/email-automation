@@ -158,9 +158,10 @@ app.delete('/api/preset/:key/cache', async (req, res) => {
 // 발송 진행 상태 인메모리 저장
 const sendJobs = {};
 
-async function executeSend(jobId, { templateId, segmentId, subject, fromName, scheduleId }) {
+async function executeSend(jobId, { templateId, segmentId, subject, fromName, scheduleId, dryRun }) {
   const job = sendJobs[jobId];
   job.status = 'running';
+  job.dryRun = !!dryRun;
 
   try {
     // 1. 템플릿 HTML 가져오기
@@ -182,6 +183,21 @@ async function executeSend(jobId, { templateId, segmentId, subject, fromName, sc
 
     job.total = filtered.length;
     job.filtered = emails.length - filtered.length;
+
+    // DRY RUN: SES 호출 없이 결과 시뮬레이션
+    if(dryRun) {
+      job.preview = {
+        subject,
+        from: `${fromName || process.env.SES_FROM_NAME || '트립비토즈'} <${process.env.SES_FROM_EMAIL || 'no-reply@tripbtoz.com'}>`,
+        sampleEmails: filtered.slice(0, 5),
+        sampleUnsubUrl: filtered[0] ? getUnsubUrl(filtered[0]) : getUnsubUrl('test@example.com'),
+        hasUnsubPlaceholder: tpl.html.includes('{{UNSUB_URL}}'),
+      };
+      await new Promise(r => setTimeout(r, 600)); // 로딩감 부여
+      job.sent = filtered.length;
+      job.status = 'done';
+      return;
+    }
 
     const from = `${fromName || process.env.SES_FROM_NAME || '트립비토즈'} <${process.env.SES_FROM_EMAIL}>`;
 
@@ -206,7 +222,6 @@ async function executeSend(jobId, { templateId, segmentId, subject, fromName, sc
           job.errors.push({ email, error: e.message });
         }
       }));
-      // SES 기본 14/s 한도 여유 있게 배치 간 지연
       if(i + 10 < filtered.length) await new Promise(r => setTimeout(r, 800));
     }
 
@@ -229,16 +244,16 @@ async function executeSend(jobId, { templateId, segmentId, subject, fromName, sc
 
 // 발송 시작
 app.post('/api/send', async (req, res) => {
-  const { templateId, segmentId, subject, fromName, scheduleId } = req.body;
+  const { templateId, segmentId, subject, fromName, scheduleId, dryRun } = req.body;
   if(!templateId || !segmentId || !subject) {
     return res.status(400).json({ error: 'templateId, segmentId, subject 필수' });
   }
-  if(!process.env.AWS_ACCESS_KEY_ID) {
+  if(!dryRun && !process.env.AWS_ACCESS_KEY_ID) {
     return res.status(400).json({ error: 'AWS 자격증명이 .env에 설정되지 않았습니다' });
   }
   const jobId = `job_${Date.now()}`;
   sendJobs[jobId] = { status: 'running', sent: 0, failed: 0, total: 0, filtered: 0, errors: [] };
-  executeSend(jobId, { templateId, segmentId, subject, fromName, scheduleId });
+  executeSend(jobId, { templateId, segmentId, subject, fromName, scheduleId, dryRun });
   res.json({ jobId });
 });
 
