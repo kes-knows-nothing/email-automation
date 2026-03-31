@@ -355,6 +355,7 @@ input[type=file].fi-file { display: none; }
 .dash-card-left { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 .dash-card-left-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dash-card-tpl { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-card-subject { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-card-seg { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-arrow { color: var(--accent); font-weight: 700; }
 .dash-card-stats { display: flex; gap: 8px; font-size: 10px; margin-top: 2px; }

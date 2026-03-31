@@ -190,10 +190,14 @@ function renderHotelCardsHtml(hotels, utmCampaign) {
   const cards = hotels.map(h => {
     const stars = '★'.repeat(Math.floor(parseFloat(h.star_rating) || 0));
     const url = h.hotel_id ? buildHotelUrl(h, utmCampaign) : '#';
+    const discountBadge = h.price_available && h.discount_rate > 0
+      ? `<span style="font-size:11px;color:#f43f5e;background:#fff0f3;padding:2px 7px;border-radius:10px;font-weight:600;">-${h.discount_rate}%</span>`
+      : '';
     const priceHtml = h.price_available
-      ? `<p style="margin:8px 0 0;font-size:15px;color:#7B3CFF;font-weight:700;">${h.discounted_price?.toLocaleString()}원 <span style="font-size:11px;color:#f43f5e;background:#fff0f3;padding:2px 7px;border-radius:10px;font-weight:600;">-${h.discount_rate}%</span></p>
-         <p style="margin:2px 0 0;font-size:11px;color:#bbb;text-decoration:line-through;">${h.regular_price?.toLocaleString()}원</p>`
-      : `<p style="margin:8px 0 0;font-size:12px;color:#bbb;">가격 정보 없음</p>`;
+      ? `<p style="margin:8px 0 0;font-size:15px;color:#7B3CFF;font-weight:700;">${String(h.discounted_price||0).replace(/\B(?=(\d{3})+(?!\d))/g,',')} 원~ ${discountBadge}</p>
+         <p style="margin:2px 0 0;font-size:11px;color:#bbb;text-decoration:line-through;">${String(h.regular_price||0).replace(/\B(?=(\d{3})+(?!\d))/g,',')} 원</p>`
+      : `<p style="margin:8px 0 0;font-size:15px;color:#ddd;font-weight:700;">가격 정보 없음</p>
+         <p style="margin:2px 0 0;font-size:11px;color:transparent;">-</p>`;
     return `<a href="${url}" target="_blank" style="display:inline-block;vertical-align:top;width:240px;margin:8px;background:#fff;border-radius:14px;border:1px solid #e8e8f0;padding:18px;box-shadow:0 2px 12px rgba(0,0,0,0.07);text-decoration:none;transition:box-shadow 0.2s;">
   <div style="font-size:10px;color:#7B3CFF;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px;">${h.city_kr || ''}</div>
   <div style="font-size:13px;font-weight:700;color:#1a1a2e;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${h.name_kr || h.name || ''}</div>
@@ -319,9 +323,14 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject
       }
       console.log(`[send] 세그먼트 쿼리 재실행: ${emails.length}명`);
     } else if(segmentId) {
+      console.log(`[send] segmentId 조회: ${segmentId} (type: ${typeof segmentId})`);
       const { data: seg, error: segErr } = await sb.from('segments').select('emails').eq('id', segmentId).single();
+      if(segErr) console.error(`[send] segment 조회 오류:`, segErr.message);
       if(segErr || !seg) throw new Error('세그먼트를 찾을 수 없습니다');
       emails = seg.emails || [];
+      console.log(`[send] segment 이메일 수: ${emails.length}`);
+    } else {
+      console.warn('[send] segmentId도 segmentQuery도 없음 → 수신자 없음');
     }
 
     // 3. 수신거부 필터링
@@ -344,7 +353,7 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject
         html = html.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
       }
       html = html.replace(/\{\{UNSUB_URL\}\}/g, getUnsubUrl(email));
-      return html;
+      return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f5f5f5;"><table cellpadding="0" cellspacing="0" width="100%" style="background:#f5f5f5;"><tr><td align="center" style="padding:20px 0;"><div style="width:600px;max-width:100%;margin:0 auto;background:#fff;">${html}</div></td></tr></table></body></html>`;
     }
 
     // DRY RUN: SES 호출 없이 결과 시뮬레이션
@@ -393,12 +402,17 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject
 
     // 6. 스케줄 상태 업데이트
     if(scheduleId) {
-      await sb.from('email_schedules').update({
-        status: 'sent',
+      const finalStatus = (job.sent === 0 && job.failed > 0) ? 'failed' : 'sent';
+      const { error: updErr } = await sb.from('email_schedules').update({
+        status: finalStatus,
         sent_at: new Date().toISOString(),
         sent_count: job.sent,
         failed_count: job.failed,
       }).eq('id', scheduleId);
+      if(updErr) console.error('[send] schedule update error:', updErr.message);
+      else console.log(`[send] schedule ${scheduleId} → ${finalStatus}`);
+    } else {
+      console.warn('[send] scheduleId 없음 — 현황판 미기록');
     }
 
     // 7. 발송 결과 리포트 메일
@@ -447,12 +461,19 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject
     job.status = 'error';
     job.errorMessage = e.message;
     console.error('[send]', e.message);
+    if(scheduleId) {
+      await sb.from('email_schedules').update({
+        status: 'failed',
+        sent_at: new Date().toISOString(),
+      }).eq('id', scheduleId);
+      console.log(`[send] schedule ${scheduleId} → failed`);
+    }
   }
 }
 
 // 발송 시작
 app.post('/api/send', async (req, res) => {
-  const { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, dryRun } = req.body;
+  const { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun } = req.body;
   if(!templateId || !subject) {
     return res.status(400).json({ error: 'templateId, subject 필수' });
   }
@@ -464,7 +485,7 @@ app.post('/api/send', async (req, res) => {
   }
   const jobId = `job_${Date.now()}`;
   sendJobs[jobId] = { status: 'running', sent: 0, failed: 0, total: 0, filtered: 0, errors: [] };
-  executeSend(jobId, { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, dryRun });
+  executeSend(jobId, { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun });
   res.json({ jobId });
 });
 
@@ -600,7 +621,7 @@ async function runDueSchedules() {
       .lte('scheduled_at', now.toISOString());
 
     for(const s of (dues || [])) {
-      if(!s.template_id || !s.segment_id) continue;
+      if(!s.template_id) continue;
       const subject = s.subject || `[트립비토즈] ${s.template_name || '이메일'}`;
       const jobId = `sched_${s.id}`;
       sendJobs[jobId] = { status: 'running', sent: 0, failed: 0, total: 0, filtered: 0, errors: [] };

@@ -57,13 +57,14 @@ function showView(name) {
   document.getElementById('tpl-name-input').style.display = isEditor ? 'block' : 'none';
   document.getElementById('topbar-nav').style.display = isEditor ? 'none' : 'flex';
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  const navMap = { list: 'nav-template', dashboard: 'nav-dashboard', segment: 'nav-segment', sql: 'nav-sql' };
+  const navMap = { list: 'nav-template', dashboard: 'nav-dashboard', segment: 'nav-segment', sql: 'nav-sql', automation: 'nav-automation' };
   if(navMap[name]) document.getElementById(navMap[name]).classList.add('active');
   currentView = name;
   if(name === 'list') renderTemplateList();
   if(name === 'dashboard') renderDashboard();
   if(name === 'segment') renderSegmentList();
   if(name === 'sql') initSQLView();
+  if(name === 'automation') initAutomationPage();
 }
 
 function goTab(tab) { showView(tab); }
@@ -277,11 +278,12 @@ function renderEditor(b, idx) {
           <button class="ba del" onclick="blocks[${idx}].data.hotels.splice(${hi},1);render();rp()">✕</button></div>
         <div class="fl">호텔명</div><input class="fi" value="${esc(h.name)}" oninput="blocks[${idx}].data.hotels[${hi}].name=this.value;rp()">
         <div class="fl">지역</div><input class="fi" value="${esc(h.area)}" oninput="blocks[${idx}].data.hotels[${hi}].area=this.value;rp()">
-        <div class="fl">가격</div><input class="fi" value="${esc(h.price)}" oninput="blocks[${idx}].data.hotels[${hi}].price=this.value;rp()">
+        <div class="fl">가격 (숫자만, 예: 150000)</div><input class="fi" type="number" value="${esc(h.price||'')}" oninput="blocks[${idx}].data.hotels[${hi}].price=this.value;rp()">
+        <div class="fl">할인율 % (없으면 빈칸)</div><input class="fi" type="number" min="0" max="99" value="${esc(h.discount||'')}" oninput="blocks[${idx}].data.hotels[${hi}].discount=this.value;rp()">
         <div class="fl">이미지 URL</div><input class="fi" placeholder="https://..." value="${esc(h.img)}" oninput="blocks[${idx}].data.hotels[${hi}].img=this.value;rp()">
         <div class="fl">예약 링크</div><input class="fi" value="${esc(h.link)}" oninput="blocks[${idx}].data.hotels[${hi}].link=this.value;rp()">
       </div>`).join('')}
-    <button class="btn-add-hotel" onclick="blocks[${idx}].data.hotels.push({name:'',area:'',price:'',img:'',link:''});render();rp();scrollBlockEditorToBottom(${idx})">+ 호텔 카드 추가</button>`;
+    <button class="btn-add-hotel" onclick="blocks[${idx}].data.hotels.push({name:'',area:'',price:'',discount:'',img:'',link:''});render();rp();scrollBlockEditorToBottom(${idx})">+ 호텔 카드 추가</button>`;
   }
   if(t==='reservation') {
     const rows = b.data.rows||[];
@@ -431,8 +433,12 @@ function blockToHTML(b) {
   if(b.type==='hotels') {
     const hs=b.data.hotels||[];
     const card=h=>{
-      const img=h.img?`<img src="${h.img}" width="100%" style="display:block;height:150px;object-fit:cover">`:`<div style="width:100%;height:150px;background:#c8b9a8;display:flex;align-items:center;justify-content:center"><span style="font-size:11px;color:#888">이미지</span></div>`;
-      return `<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;background:#fff"><tr><td>${img}</td></tr><tr><td style="padding:12px 14px;${FF}"><div style="font-size:14px;font-weight:bold;color:#181818;margin-bottom:3px">${h.name||'호텔명'}</div><div style="font-size:12px;color:#818286;margin-bottom:10px">${h.area||''}</div><div style="font-size:16px;font-weight:bold;color:#181818">${h.price||''}</div><div style="font-size:11px;color:#818286;margin-top:2px">1박 기준</div></td></tr></table>`;
+      const priceNum = parseInt(String(h.price||'').replace(/[^0-9]/g,'')) || 0;
+      const fmtPrice = priceNum > 0 ? priceNum.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' 원~' : '';
+      const discBadge = h.discount ? `<div style="position:absolute;top:8px;left:8px;background:#f43f5e;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;">-${h.discount}%</div>` : '';
+      const imgBox = `<div style="position:relative;">${h.img ? `<img src="${h.img}" width="100%" style="display:block;height:150px;object-fit:cover;">` : `<div style="width:100%;height:150px;background:#c8b9a8;"></div>`}${discBadge}</div>`;
+      const cardInner = `<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;background:#fff"><tr><td>${imgBox}</td></tr><tr><td style="padding:12px 14px;${FF}"><div style="font-size:14px;font-weight:bold;color:#181818;margin-bottom:3px">${h.name||'호텔명'}</div><div style="font-size:12px;color:#818286;margin-bottom:8px">${h.area||''}</div><div style="font-size:16px;font-weight:bold;color:#7B3CFF">${fmtPrice}</div><div style="font-size:11px;color:#818286;margin-top:2px">1박 기준</div></td></tr></table>`;
+      return h.link ? `<a href="${h.link}" target="_blank" style="display:block;text-decoration:none;color:inherit">${cardInner}</a>` : cardInner;
     };
     const rows=[];
     for(let i=0;i<hs.length;i+=2) rows.push(`<tr><td width="32"></td><td style="padding:0 5px 10px 0;vertical-align:top;width:262px">${card(hs[i])}</td><td style="padding:0 0 10px 5px;vertical-align:top;width:262px">${hs[i+1]?card(hs[i+1]):''}</td><td width="32"></td></tr>`);
@@ -443,7 +449,7 @@ function blockToHTML(b) {
 
 function rp() {
   const rows = blocks.map(b => blockToHTML(b)).join('\n');
-  document.getElementById('preview').innerHTML = `<table cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-collapse:collapse">${rows}</table>`;
+  document.getElementById('preview').innerHTML = `<table cellpadding="0" cellspacing="0" width="600" style="max-width:600px;background:#fff;border-collapse:collapse;margin:0 auto">${rows}</table>`;
 }
 
 // ═══════════════════════════════════════════
@@ -976,18 +982,21 @@ function addSelectedToCart() {
     const row = rows[parseInt(cb.dataset.idx)];
     const hid = row[hotelIdIdx];
     const priceData = (window._hotelPrices || {})[hid];
-    let priceStr = priceIdx !== -1 ? String(row[priceIdx] || '') : '';
+    let priceNum = 0;
+    let discountNum = 0;
     if(priceData && priceData.available) {
-      priceStr = priceData.discounted_price >= 10000
-        ? `${Math.round(priceData.discounted_price / 10000)}만원`
-        : `${Math.round(priceData.discounted_price).toLocaleString()}원`;
+      priceNum    = priceData.discounted_price || 0;
+      discountNum = priceData.discount_rate    || 0;
+    } else if(priceIdx !== -1 && row[priceIdx]) {
+      priceNum = parseInt(String(row[priceIdx]).replace(/[^0-9]/g, '')) || 0;
     }
     cartHotels.push({
-      name:  nameIdx !== -1 ? String(row[nameIdx] || '') : '',
-      area:  areaIdx !== -1 ? String(row[areaIdx] || '') : '',
-      price: priceStr,
-      img:   imgIdx  !== -1 ? String(row[imgIdx]  || '') : '',
-      link:  `https://www.tripbtoz.com/hotel/${hid}`,
+      name:     nameIdx !== -1 ? String(row[nameIdx] || '') : '',
+      area:     areaIdx !== -1 ? String(row[areaIdx] || '') : '',
+      price:    priceNum,
+      discount: discountNum,
+      img:      imgIdx  !== -1 ? String(row[imgIdx]  || '') : '',
+      link:     `https://www.tripbtoz.com/hotel/${hid}`,
     });
   });
   updateCartBadge();
@@ -1289,7 +1298,12 @@ async function renderDashboard() {
     .select('*').eq('status', 'sent')
     .gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false });
 
+  const { data: failed } = await sb.from('email_schedules')
+    .select('*').eq('status', 'failed')
+    .gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false });
+
   const sentList = sent || [];
+  const failedList = failed || [];
   const totalSent   = sentList.reduce((s, r) => s + (r.sent_count   || 0), 0);
   const totalFailed = sentList.reduce((s, r) => s + (r.failed_count || 0), 0);
 
@@ -1300,6 +1314,7 @@ async function renderDashboard() {
 
   renderDashSection('dash-pending-list', pending || [], 'pending');
   renderDashSection('dash-sent-list', sentList, 'sent');
+  renderDashSection('dash-failed-list', failedList, 'failed');
 }
 
 const SCHEDULE_TYPE_LABEL = { once: '1회성', daily: '매일', weekly: '매주', biweekly: '격주', monthly: '매월' };
@@ -1321,11 +1336,12 @@ function fmtScheduleTime(s) {
 function renderDashSection(containerId, list, type) {
   const el = document.getElementById(containerId);
   if(list.length === 0) {
-    el.innerHTML = `<div class="dash-empty">${type === 'pending' ? '예약된 발송이 없어요' : '최근 2주 발송 내역이 없어요'}</div>`;
+    const emptyMsg = type === 'pending' ? '예약된 발송이 없어요' : type === 'failed' ? '최근 2주 실패 내역이 없어요' : '최근 2주 발송 내역이 없어요';
+    el.innerHTML = `<div class="dash-empty">${emptyMsg}</div>`;
     return;
   }
   el.innerHTML = list.map(s => {
-    const timeStr = type === 'sent'
+    const timeStr = (type === 'sent' || type === 'failed')
       ? (s.sent_at ? new Date(s.sent_at).toLocaleString('ko-KR',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '-')
       : fmtScheduleTime(s);
     const badge = `<span class="dash-type-badge dash-type-${s.schedule_type}">${SCHEDULE_TYPE_LABEL[s.schedule_type]||s.schedule_type}</span>`;
@@ -1333,18 +1349,20 @@ function renderDashSection(containerId, list, type) {
       ? `<button class="btn-danger btn-sm" onclick="cancelSchedule('${s.id}')">취소</button>
          <button class="btn-schedule btn-sm" onclick="markSent('${s.id}')">발송 완료 처리</button>`
       : '';
-    const sentStats = type === 'sent'
+    const sentStats = (type === 'sent' || type === 'failed')
       ? `<div class="dash-card-stats">
            <span class="dash-stat-sent">✔ ${(s.sent_count||0).toLocaleString()}명 발송</span>
            ${s.failed_count > 0 ? `<span class="dash-stat-failed">✘ ${s.failed_count.toLocaleString()}명 실패</span>` : ''}
          </div>`
       : '';
-    return `<div class="dash-card">
+    const clickAttr = (type === 'pending' || type === 'failed') ? `onclick="openScheduleDetail('${s.id}')" style="cursor:pointer"` : '';
+    return `<div class="dash-card" ${clickAttr}>
       <div class="dash-card-left">
         <div class="dash-card-left-row">
           ${badge}
-          <div class="dash-card-tpl">${s.template_name}</div>
+          <div class="dash-card-tpl">${s.template_name || '-'}</div>
         </div>
+        <div class="dash-card-subject">${s.subject || '-'}</div>
         <div class="dash-card-seg">${s.segment_name ? '<span class="dash-arrow">→</span> ' + s.segment_name : '세그먼트 없음'}</div>
         ${sentStats}
       </div>
@@ -1354,6 +1372,41 @@ function renderDashSection(containerId, list, type) {
       </div>
     </div>`;
   }).join('');
+}
+
+async function openScheduleDetail(id) {
+  const { data: s, error } = await sb.from('email_schedules').select('*').eq('id', id).single();
+  if(error || !s) { showToast('정보를 불러올 수 없어요'); return; }
+
+  const typeLabel = SCHEDULE_TYPE_LABEL[s.schedule_type] || s.schedule_type;
+  const scheduledStr = s.scheduled_at
+    ? new Date(s.scheduled_at).toLocaleString('ko-KR', {year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'})
+    : '-';
+  const createdStr = s.created_at
+    ? new Date(s.created_at).toLocaleString('ko-KR', {year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'})
+    : '-';
+
+  document.getElementById('schedule-detail-body').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;line-height:2">
+      <tr><td style="color:#888;width:90px">템플릿</td><td style="font-weight:600">${s.template_name || '-'}</td></tr>
+      <tr><td style="color:#888">제목</td><td>${s.subject || '-'}</td></tr>
+      <tr><td style="color:#888">수신자</td><td>${s.segment_name || '-'}</td></tr>
+      <tr><td style="color:#888">발송 주기</td><td>${typeLabel}</td></tr>
+      <tr><td style="color:#888">예약 일시</td><td>${scheduledStr}</td></tr>
+      <tr><td style="color:#888">등록일시</td><td>${createdStr}</td></tr>
+    </table>`;
+
+  document.getElementById('schedule-detail-cancel-btn').onclick = async () => {
+    if(!confirm('예약을 취소할까요?')) return;
+    await cancelSchedule(id);
+    closeScheduleDetail();
+  };
+
+  document.getElementById('schedule-detail-modal').style.display = 'flex';
+}
+
+function closeScheduleDetail() {
+  document.getElementById('schedule-detail-modal').style.display = 'none';
 }
 
 async function cancelSchedule(id) {
@@ -1394,18 +1447,46 @@ async function openScheduleModal(tplId, tplName) {
     daysSel.innerHTML = Array.from({length:31},(_,i)=>`<option value="${i+1}">${i+1}일</option>`).join('');
   }
 
-  // 1회성 기본값: 내일 오전 9시
-  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1); tomorrow.setHours(9,0,0,0);
-  document.getElementById('sch-once-dt').value = tomorrow.toISOString().slice(0,16);
+  // 1회성 기본값: 현재 시각
+  const now = new Date();
+  document.getElementById('sch-once-dt').value = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
 
   // 타입 초기화
   document.querySelector('input[name="sch-type"][value="once"]').checked = true;
   onSchTypeChange();
 
+  // 저장된 콘텐츠 쿼리 복원
+  const savedQuery = localStorage.getItem(`tpl_cq_${tplId}`);
+  const savedLimit = localStorage.getItem(`tpl_cl_${tplId}`);
+  const savedUtm   = localStorage.getItem(`tpl_utm_${tplId}`);
+  if(savedQuery) {
+    document.getElementById('sch-content-query').value = savedQuery;
+    document.getElementById('sch-dynamic-section').style.display = '';
+    document.getElementById('sch-dynamic-arrow').textContent = '▾';
+  }
+  if(savedLimit) {
+    const r = document.querySelector(`input[name="sch-limit"][value="${savedLimit}"]`);
+    if(r) r.checked = true;
+  }
+  if(savedUtm) document.getElementById('sch-utm-campaign').value = savedUtm;
+
+  // 제목 초기화
+  document.getElementById('sch-subject').value = '';
+
   document.getElementById('schedule-modal').style.display = 'flex';
 }
 
 function closeScheduleModal() {
+  if(_schedTplId) {
+    const q   = document.getElementById('sch-content-query').value.trim();
+    const lim = document.querySelector('input[name="sch-limit"]:checked')?.value;
+    const utm = document.getElementById('sch-utm-campaign').value.trim();
+    if(q)   localStorage.setItem(`tpl_cq_${_schedTplId}`, q);
+    else    localStorage.removeItem(`tpl_cq_${_schedTplId}`);
+    if(lim) localStorage.setItem(`tpl_cl_${_schedTplId}`, lim);
+    if(utm) localStorage.setItem(`tpl_utm_${_schedTplId}`, utm);
+    else    localStorage.removeItem(`tpl_utm_${_schedTplId}`);
+  }
   document.getElementById('schedule-modal').style.display = 'none';
   _schedTplId = null;
 }
@@ -1450,24 +1531,49 @@ function onSchTypeChange() {
 async function sendNow(dryRun = false) {
   const subject = document.getElementById('sch-subject').value.trim();
   const segSel = document.getElementById('sch-segment');
-  const segId = segSel.value;
+  const segId = segSel.value || null;
   const segName = segId ? segSel.options[segSel.selectedIndex].dataset.name : '';
+  const segmentQuery = document.getElementById('sch-segment-query').value.trim() || null;
+  const contentQuery = document.getElementById('sch-content-query').value.trim() || null;
+  const contentLimit = parseInt(document.querySelector('input[name="sch-limit"]:checked')?.value || '6');
+  const utmCampaign  = document.getElementById('sch-utm-campaign').value.trim() || null;
 
+  if(!_schedTplId) { showToast('템플릿 정보가 없습니다'); return; }
   if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
-  if(!segId) { showToast('세그먼트를 선택해주세요'); return; }
-  if(!_schedTplId) return;
+  if(!segId && !segmentQuery) { showToast('세그먼트를 선택하거나 세그먼트 쿼리를 입력해주세요'); return; }
 
   const tplName = document.getElementById('sch-tpl-name').textContent;
-  if(!dryRun && !confirm(`"${tplName}" 을 "${segName}" 에게 지금 바로 발송할까요?`)) return;
+  if(!dryRun && !confirm(`"${tplName}" 을 "${segName || '다이나믹 세그먼트'}" 에게 지금 바로 발송할까요?`)) return;
 
+  const templateId = _schedTplId;
+  const tplNameFinal = document.getElementById('sch-tpl-name').textContent;
   closeScheduleModal();
   openSendProgress(dryRun ? '🧪 테스트 발송 시뮬레이션 중...' : '발송 중...');
 
   try {
+    // 즉시 발송도 현황판에 기록되도록 schedule 레코드 생성
+    let scheduleId = null;
+    if(!dryRun) {
+      const now = new Date().toISOString();
+      const { data: sch, error: schErr } = await sb.from('email_schedules').insert({
+        template_id: templateId,
+        template_name: tplNameFinal,
+        segment_name: segName || '다이나믹 세그먼트',
+        subject,
+        schedule_type: 'once',
+        scheduled_at: now,
+        status: 'pending',
+        created_at: now,
+      }).select('id').single();
+      if(schErr) console.error('[sendNow] schedule insert error:', schErr);
+      scheduleId = sch?.id || null;
+      console.log('[sendNow] scheduleId:', scheduleId);
+    }
+
     const res = await fetch('http://localhost:3001/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ templateId: _schedTplId, segmentId: segId, subject, dryRun }),
+      body: JSON.stringify({ templateId, segmentId: segId, segmentQuery, subject, contentQuery, contentLimit, utmCampaign, dryRun, scheduleId }),
     });
     const { jobId, error } = await res.json();
     if(error) { setSendProgressError(error); return; }
@@ -1555,23 +1661,14 @@ async function saveSchedule() {
   const subject = document.getElementById('sch-subject').value.trim();
   if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
 
-  const segmentQuery = document.getElementById('sch-segment-query').value.trim() || null;
-  const contentQuery = document.getElementById('sch-content-query').value.trim() || null;
-  const contentLimit = parseInt(document.querySelector('input[name="sch-limit"]:checked')?.value || '6');
-  const utmCampaign  = document.getElementById('sch-utm-campaign').value.trim() || null;
-
   const payload = {
-    template_id: _schedTplId,
+    template_id: String(_schedTplId),
     template_name: tplName,
-    segment_id: segId,
+    segment_id: segId ? String(segId) : null,
     segment_name: segName,
-    segment_query: segmentQuery,
     subject,
     schedule_type: type,
     status: 'pending',
-    content_query: contentQuery,
-    content_limit: contentLimit,
-    utm_campaign:  utmCampaign,
   };
 
   if(type === 'once') {
@@ -1594,5 +1691,396 @@ async function saveSchedule() {
   if(error) { showToast('저장 실패: ' + error.message); return; }
 
   closeScheduleModal();
+  showToast('발송 예약이 저장되었어요');
+}
+
+// ═══════════════════════════════════════════
+// AUTOMATION PAGE
+// ═══════════════════════════════════════════
+
+const AUTO_SEG_SQLS = {
+  member: `SELECT DISTINCT email FROM tripbtoz.users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''`,
+  guest: `SELECT DISTINCT c.user_email AS email FROM tripbtoz.checkouts c JOIN tripbtoz_payment.checkout_detail cd ON cd.checkout_id = c.id WHERE c.user_type = 'guest' AND cd.ad_policy_agreement_yn = 1 AND c.user_email IS NOT NULL AND c.user_email != ''`,
+  all: `SELECT DISTINCT email FROM tripbtoz.users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
+UNION
+SELECT DISTINCT c.user_email AS email FROM tripbtoz.checkouts c JOIN tripbtoz_payment.checkout_detail cd ON cd.checkout_id = c.id WHERE c.user_type = 'guest' AND cd.ad_policy_agreement_yn = 1 AND c.user_email IS NOT NULL AND c.user_email != ''`,
+};
+
+const AUTO_CONTENT_SQLS = {
+  next_month: `SELECT h.id as hotel_id, h.name_kr, h.city_kr, h.star_rating FROM tripbtoz.hotels h JOIN tripbtoz.bookings b ON b.hotel_id = h.id WHERE b.check_in BETWEEN {{NEXT_MONTH_START}} AND {{NEXT_MONTH_END}} AND h.city_kr IS NOT NULL GROUP BY h.id ORDER BY COUNT(*) DESC LIMIT {{LIMIT}}`,
+  recent: `SELECT h.id as hotel_id, h.name_kr, h.city_kr, h.star_rating FROM tripbtoz.hotels h JOIN tripbtoz.bookings b ON b.hotel_id = h.id WHERE b.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND h.city_kr IS NOT NULL GROUP BY h.id ORDER BY COUNT(*) DESC LIMIT {{LIMIT}}`,
+};
+
+let _autoTplId = null;
+let _autoTplName = '';
+
+async function initAutomationPage() {
+  // 템플릿 목록 로드
+  const sel = document.getElementById('auto-tpl-select');
+  const { data: tpls } = await sb.from('templates').select('id,name').order('updated_at', { ascending: false });
+  sel.innerHTML = '<option value="">템플릿 선택...</option>' +
+    (tpls || []).map(t => `<option value="${t.id}">${t.name || '제목 없는 템플릿'}</option>`).join('');
+
+  // 매월 일수 채우기
+  const daysSel = document.getElementById('auto-monthly-day');
+  if(!daysSel.options.length) {
+    daysSel.innerHTML = Array.from({ length: 31 }, (_, i) => `<option value="${i+1}">${i+1}일</option>`).join('');
+  }
+
+  // 1회성 기본값: 내일 오전 9시
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(9, 0, 0, 0);
+  document.getElementById('auto-once-dt').value = tomorrow.toISOString().slice(0, 16);
+
+  // localStorage 복원
+  autoRestore();
+  onAutoTypeChange();
+}
+
+function autoSave() {
+  const d = {
+    tplId:       document.getElementById('auto-tpl-select').value,
+    subject:     document.getElementById('auto-subject').value,
+    utm:         document.getElementById('auto-utm').value,
+    segDesc:     document.getElementById('auto-seg-desc').value,
+    segSql:      document.getElementById('auto-seg-sql').value,
+    contentDesc: document.getElementById('auto-content-desc').value,
+    contentSql:  document.getElementById('auto-content-sql').value,
+    limit:       document.querySelector('input[name="auto-limit"]:checked')?.value || '6',
+    type:        document.querySelector('input[name="auto-type"]:checked')?.value || 'now',
+    onceDt:      document.getElementById('auto-once-dt').value,
+    dailyTime:   document.getElementById('auto-daily-time').value,
+    weekday:     document.querySelector('input[name="auto-weekday"]:checked')?.value || '',
+    weeklyTime:  document.getElementById('auto-weekly-time').value,
+    monthlyDay:  document.getElementById('auto-monthly-day').value,
+    monthlyTime: document.getElementById('auto-monthly-time').value,
+    contentOpen: document.getElementById('auto-content-body').style.display !== 'none',
+  };
+  localStorage.setItem('auto_settings', JSON.stringify(d));
+}
+
+function autoRestore() {
+  try {
+    const d = JSON.parse(localStorage.getItem('auto_settings') || 'null');
+    if(!d) return;
+
+    if(d.tplId) {
+      document.getElementById('auto-tpl-select').value = d.tplId;
+      onAutoTplSelect();
+    }
+    if(d.subject)     document.getElementById('auto-subject').value = d.subject;
+    if(d.utm)         document.getElementById('auto-utm').value = d.utm;
+    if(d.segDesc)     document.getElementById('auto-seg-desc').value = d.segDesc;
+    if(d.segSql)      document.getElementById('auto-seg-sql').value = d.segSql;
+    if(d.contentDesc) document.getElementById('auto-content-desc').value = d.contentDesc;
+    if(d.contentSql)  document.getElementById('auto-content-sql').value = d.contentSql;
+    if(d.limit) {
+      const r = document.querySelector(`input[name="auto-limit"][value="${d.limit}"]`);
+      if(r) r.checked = true;
+    }
+    if(d.type) {
+      const r = document.querySelector(`input[name="auto-type"][value="${d.type}"]`);
+      if(r) r.checked = true;
+    }
+    if(d.onceDt)     document.getElementById('auto-once-dt').value = d.onceDt;
+    if(d.dailyTime)  document.getElementById('auto-daily-time').value = d.dailyTime;
+    if(d.weekday) {
+      const r = document.querySelector(`input[name="auto-weekday"][value="${d.weekday}"]`);
+      if(r) r.checked = true;
+    }
+    if(d.weeklyTime)  document.getElementById('auto-weekly-time').value = d.weeklyTime;
+    if(d.monthlyDay)  document.getElementById('auto-monthly-day').value = d.monthlyDay;
+    if(d.monthlyTime) document.getElementById('auto-monthly-time').value = d.monthlyTime;
+    if(d.contentOpen) {
+      document.getElementById('auto-content-body').style.display = '';
+      document.getElementById('auto-content-arrow').textContent = '▾';
+    }
+  } catch(e) {}
+}
+
+async function onAutoTplSelect() {
+  const sel = document.getElementById('auto-tpl-select');
+  _autoTplId = sel.value || null;
+  _autoTplName = sel.options[sel.selectedIndex]?.text || '';
+  autoSave();
+
+  if(!_autoTplId) {
+    document.getElementById('auto-preview-empty').style.display = '';
+    document.getElementById('auto-preview-frame').style.display = 'none';
+    return;
+  }
+
+  // 템플릿 html 로드해서 미리보기
+  const { data: tpl } = await sb.from('templates').select('html').eq('id', _autoTplId).single();
+  if(tpl?.html) {
+    document.getElementById('auto-preview-html').innerHTML = tpl.html;
+    document.getElementById('auto-preview-empty').style.display = 'none';
+    document.getElementById('auto-preview-frame').style.display = '';
+  }
+}
+
+function autoToggleContent() {
+  const body = document.getElementById('auto-content-body');
+  const arrow = document.getElementById('auto-content-arrow');
+  const open = body.style.display === 'none';
+  body.style.display = open ? '' : 'none';
+  arrow.textContent = open ? '▾' : '▸';
+  autoSave();
+}
+
+function autoFillSegSQL(key) {
+  document.getElementById('auto-seg-sql').value = AUTO_SEG_SQLS[key] || '';
+  autoSave();
+}
+
+function autoFillContentSQL(key) {
+  document.getElementById('auto-content-sql').value = AUTO_CONTENT_SQLS[key] || '';
+  autoSave();
+}
+
+async function autoCheckRecipients() {
+  const sql = document.getElementById('auto-seg-sql').value.trim();
+  if(!sql) { showToast('SQL을 먼저 입력해주세요'); return; }
+  const badge = document.getElementById('auto-recipient-badge');
+  const badgeRight = document.getElementById('auto-recipient-badge-right');
+  badge.style.display = 'inline-flex';
+  badge.textContent = '확인 중...';
+  badgeRight.style.display = 'none';
+  try {
+    const res = await fetch('http://localhost:3001/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql }),
+    });
+    const data = await res.json();
+    if(data.error) { badge.textContent = '오류: ' + data.error.substring(0, 50); return; }
+    const count = data.total;
+    const txt = `수신자 ${count.toLocaleString()}명`;
+    badge.textContent = txt;
+    badgeRight.textContent = txt;
+    badgeRight.style.display = 'inline-flex';
+  } catch(e) {
+    badge.textContent = '서버 연결 실패';
+  }
+}
+
+async function autoPreviewContent() {
+  const contentQuery = document.getElementById('auto-content-sql').value.trim();
+  const contentLimit = parseInt(document.querySelector('input[name="auto-limit"]:checked')?.value || '6');
+  const preview = document.getElementById('auto-content-preview');
+  if(!contentQuery) { preview.style.display = 'none'; return; }
+  preview.style.display = '';
+  preview.textContent = '조회 중...';
+  try {
+    const res = await fetch('http://localhost:3001/api/preview-content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentQuery, contentLimit }),
+    });
+    const data = await res.json();
+    if(data.error) { preview.textContent = '오류: ' + data.error; return; }
+    preview.innerHTML = data.hotels.map(h =>
+      `<div style="margin-bottom:4px">• <strong>${h.name_kr || h.name || '-'}</strong> (${h.city_kr || '-'}) ${h.price_available ? `<span style="color:var(--accent)">${h.discounted_price?.toLocaleString()}원 -${h.discount_rate}%</span>` : '<span style="color:#666">가격미조회</span>'}</div>`
+    ).join('');
+  } catch(e) { preview.textContent = '서버 연결 실패'; }
+}
+
+function onAutoTypeChange() {
+  const type = document.querySelector('input[name="auto-type"]:checked')?.value;
+  document.getElementById('auto-once-fields').style.display    = type === 'once'    ? '' : 'none';
+  document.getElementById('auto-daily-fields').style.display   = type === 'daily'   ? '' : 'none';
+  document.getElementById('auto-weekly-fields').style.display  = (type === 'weekly' || type === 'biweekly') ? '' : 'none';
+  document.getElementById('auto-monthly-fields').style.display = type === 'monthly' ? '' : 'none';
+  document.getElementById('auto-btn-send-now').style.display = type === 'now' ? '' : 'none';
+  document.getElementById('auto-btn-save').style.display     = type === 'now' ? 'none' : '';
+  autoRenderSchedulePreview();
+}
+
+// 제목 변수 {{월}}, {{N주차}}, {{MM}}, {{YYYY}} 치환
+function autoResolveSubject(template, date) {
+  const d = date || new Date();
+  const month = d.getMonth() + 1;
+  const year  = d.getFullYear();
+  const mm    = String(month).padStart(2, '0');
+  // N주차: 해당 월의 몇 번째 주인지
+  const firstDay = new Date(year, d.getMonth(), 1).getDay(); // 0=일
+  const weekN = Math.ceil((d.getDate() + firstDay) / 7);
+  return template
+    .replace(/\{\{월\}\}/g, `${month}월`)
+    .replace(/\{\{N주차\}\}/g, `${weekN}주차`)
+    .replace(/\{\{MM\}\}/g, mm)
+    .replace(/\{\{YYYY\}\}/g, String(year));
+}
+
+// 발송 주기에 따른 다음 N개 날짜 계산
+function autoGetNextDates(n = 6) {
+  const type    = document.querySelector('input[name="auto-type"]:checked')?.value;
+  const dates   = [];
+  const now     = new Date();
+
+  if(type === 'now' || type === 'once') {
+    const dt = document.getElementById('auto-once-dt')?.value;
+    dates.push(dt ? new Date(dt) : now);
+    return dates;
+  }
+
+  let cursor = new Date(now);
+  cursor.setSeconds(0, 0);
+
+  if(type === 'daily') {
+    const [h, m] = (document.getElementById('auto-daily-time')?.value || '09:00').split(':');
+    cursor.setHours(+h, +m);
+    if(cursor <= now) cursor.setDate(cursor.getDate() + 1);
+    for(let i = 0; i < n; i++) { dates.push(new Date(cursor)); cursor.setDate(cursor.getDate() + 1); }
+  } else if(type === 'weekly' || type === 'biweekly') {
+    const targetDay = parseInt(document.querySelector('input[name="auto-weekday"]:checked')?.value ?? '1');
+    const [h, m]   = (document.getElementById('auto-weekly-time')?.value || '09:00').split(':');
+    const step     = type === 'biweekly' ? 14 : 7;
+    let diff = (targetDay - cursor.getDay() + 7) % 7 || 7;
+    cursor.setDate(cursor.getDate() + diff);
+    cursor.setHours(+h, +m);
+    for(let i = 0; i < n; i++) { dates.push(new Date(cursor)); cursor.setDate(cursor.getDate() + step); }
+  } else if(type === 'monthly') {
+    const day  = parseInt(document.getElementById('auto-monthly-day')?.value || '1');
+    const [h, m] = (document.getElementById('auto-monthly-time')?.value || '09:00').split(':');
+    cursor = new Date(now.getFullYear(), now.getMonth(), day, +h, +m);
+    if(cursor <= now) cursor.setMonth(cursor.getMonth() + 1);
+    for(let i = 0; i < n; i++) { dates.push(new Date(cursor)); cursor.setMonth(cursor.getMonth() + 1); }
+  }
+  return dates;
+}
+
+function autoRenderSchedulePreview() {
+  const el = document.getElementById('auto-schedule-preview');
+  if(!el) return;
+  const subjectTpl = document.getElementById('auto-subject')?.value.trim();
+  const type = document.querySelector('input[name="auto-type"]:checked')?.value;
+  if(!subjectTpl || type === 'now') { el.style.display = 'none'; return; }
+
+  const dates = autoGetNextDates(6);
+  if(!dates.length) { el.style.display = 'none'; return; }
+
+  const fmt = d => d.toLocaleDateString('ko-KR', { month:'short', day:'numeric', weekday:'short', hour:'2-digit', minute:'2-digit' });
+  const rows = dates.map(d =>
+    `<div class="auto-schedule-item">
+      <span class="auto-schedule-date">${fmt(d)}</span>
+      <span class="auto-schedule-subject">${autoResolveSubject(subjectTpl, d)}</span>
+    </div>`
+  ).join('');
+
+  el.innerHTML = `<div class="auto-label" style="margin-bottom:6px">다음 발송 예정 (제목 미리보기)</div><div class="auto-schedule-list">${rows}</div>`;
+  el.style.display = '';
+}
+
+function autoInsertVar(v) {
+  const el = document.getElementById('auto-subject');
+  if(!el) return;
+  const s = el.selectionStart, e = el.selectionEnd;
+  el.value = el.value.slice(0, s) + v + el.value.slice(e);
+  el.selectionStart = el.selectionEnd = s + v.length;
+  el.focus();
+  autoSave();
+  autoRenderSchedulePreview();
+}
+
+async function autoSendNow(dryRun = false) {
+  const subject = autoResolveSubject(document.getElementById('auto-subject').value.trim());
+  const segmentQuery = document.getElementById('auto-seg-sql').value.trim() || null;
+  const contentQuery = document.getElementById('auto-content-sql').value.trim() || null;
+  const contentLimit = parseInt(document.querySelector('input[name="auto-limit"]:checked')?.value || '6');
+  const utmCampaign  = document.getElementById('auto-utm').value.trim() || null;
+  const segName      = document.getElementById('auto-seg-desc').value.trim() || '자동화 세그먼트';
+
+  if(!_autoTplId) { showToast('템플릿을 선택해주세요'); return; }
+  if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('auto-subject').focus(); return; }
+  if(!segmentQuery) { showToast('수신자 SQL을 입력해주세요'); return; }
+
+  if(!dryRun && !confirm(`"${_autoTplName}" 을 "${segName}" 에게 지금 바로 발송할까요?`)) return;
+
+  const templateId = _autoTplId;
+  const tplNameFinal = _autoTplName;
+  openSendProgress(dryRun ? '🧪 테스트 발송 시뮬레이션 중...' : '발송 중...');
+
+  try {
+    let scheduleId = null;
+    if(!dryRun) {
+      const now = new Date().toISOString();
+      const { data: sch } = await sb.from('email_schedules').insert({
+        template_id: templateId,
+        template_name: tplNameFinal,
+        segment_id: null,
+        segment_name: segName,
+        subject,
+        schedule_type: 'once',
+        scheduled_at: now,
+        status: 'sending',
+        created_at: now,
+      }).select('id').single();
+      scheduleId = sch?.id || null;
+    }
+
+    const res = await fetch('http://localhost:3001/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templateId, segmentId: null, segmentQuery, subject, contentQuery, contentLimit, utmCampaign, dryRun, scheduleId }),
+    });
+    const { jobId, error } = await res.json();
+    if(error) { setSendProgressError(error); return; }
+    pollSendJob(jobId, dryRun);
+  } catch(e) {
+    setSendProgressError('서버 연결 실패: ' + e.message);
+  }
+}
+
+async function autoSaveSchedule() {
+  const type = document.querySelector('input[name="auto-type"]:checked')?.value;
+  if(!_autoTplId) { showToast('템플릿을 선택해주세요'); return; }
+
+  const subjectTpl = document.getElementById('auto-subject').value.trim();
+  if(!subjectTpl) { showToast('이메일 제목을 입력해주세요'); document.getElementById('auto-subject').focus(); return; }
+  // 첫 번째 예정 발송일 기준으로 제목 변수 치환
+  const firstDate = autoGetNextDates(1)[0] || new Date();
+  const subject = autoResolveSubject(subjectTpl, firstDate);
+
+  const segmentQuery = document.getElementById('auto-seg-sql').value.trim() || null;
+  if(!segmentQuery) { showToast('수신자 SQL을 입력해주세요'); return; }
+
+  const contentQuery = document.getElementById('auto-content-sql').value.trim() || null;
+  const contentLimit = parseInt(document.querySelector('input[name="auto-limit"]:checked')?.value || '6');
+  const utmCampaign  = document.getElementById('auto-utm').value.trim() || null;
+  const segName      = document.getElementById('auto-seg-desc').value.trim() || null;
+
+  const payload = {
+    template_id:    _autoTplId,
+    template_name:  _autoTplName,
+    segment_id:     null,
+    segment_name:   segName,
+    segment_query:  segmentQuery,
+    subject,
+    schedule_type:  type,
+    status:         'pending',
+    content_query:  contentQuery,
+    content_limit:  contentLimit,
+    utm_campaign:   utmCampaign,
+  };
+
+  if(type === 'once') {
+    const dt = document.getElementById('auto-once-dt').value;
+    if(!dt) { showToast('발송 일시를 선택해주세요'); return; }
+    payload.scheduled_at = new Date(dt).toISOString();
+  } else if(type === 'daily') {
+    payload.send_time = document.getElementById('auto-daily-time').value;
+  } else if(type === 'weekly' || type === 'biweekly') {
+    const wd = document.querySelector('input[name="auto-weekday"]:checked');
+    if(!wd) { showToast('요일을 선택해주세요'); return; }
+    payload.weekday   = parseInt(wd.value);
+    payload.send_time = document.getElementById('auto-weekly-time').value;
+  } else if(type === 'monthly') {
+    payload.day_of_month = parseInt(document.getElementById('auto-monthly-day').value);
+    payload.send_time    = document.getElementById('auto-monthly-time').value;
+  }
+
+  const { error } = await sb.from('email_schedules').insert(payload);
+  if(error) { showToast('저장 실패: ' + error.message); return; }
+
   showToast('발송 예약이 저장되었어요');
 }
