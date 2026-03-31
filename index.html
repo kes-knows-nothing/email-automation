@@ -38,16 +38,36 @@
   <div class="list-header">
     <div>
       <div class="list-title">현황판</div>
-      <div class="list-sub" id="dash-sub">최근 2주 발송 현황</div>
+      <div class="list-sub">최근 2주 발송 현황</div>
     </div>
   </div>
-  <div id="dash-pending-section">
-    <div class="dash-section-title">⏳ 발송 대기</div>
-    <div id="dash-pending-list" class="dash-list"></div>
+  <div class="dash-kpi-row">
+    <div class="dash-kpi-card">
+      <div class="dash-kpi-label">발송 대기</div>
+      <div class="dash-kpi-value" id="kpi-pending">—</div>
+    </div>
+    <div class="dash-kpi-card">
+      <div class="dash-kpi-label">완료 (2주)</div>
+      <div class="dash-kpi-value" id="kpi-sent">—</div>
+    </div>
+    <div class="dash-kpi-card accent">
+      <div class="dash-kpi-label">총 발송 인원</div>
+      <div class="dash-kpi-value" id="kpi-total-sent">—</div>
+    </div>
+    <div class="dash-kpi-card danger">
+      <div class="dash-kpi-label">총 실패 인원</div>
+      <div class="dash-kpi-value" id="kpi-total-failed">—</div>
+    </div>
   </div>
-  <div id="dash-sent-section" style="margin-top:32px">
-    <div class="dash-section-title">✅ 발송 완료</div>
-    <div id="dash-sent-list" class="dash-list"></div>
+  <div class="dash-columns">
+    <div class="dash-col">
+      <div class="dash-section-title">⏳ 발송 대기</div>
+      <div id="dash-pending-list" class="dash-list"></div>
+    </div>
+    <div class="dash-col">
+      <div class="dash-section-title">✅ 발송 완료</div>
+      <div id="dash-sent-list" class="dash-list"></div>
+    </div>
   </div>
 </div>
 
@@ -161,6 +181,43 @@
         <div class="fl" style="margin-top:14px">발송 시각</div>
         <input class="fi" type="time" id="sch-monthly-time" value="09:00" style="margin-top:4px">
       </div>
+
+      <!-- 다이나믹 콘텐츠 -->
+      <div class="sch-dynamic-toggle" onclick="toggleDynamicSection()" id="sch-dynamic-toggle">
+        <span>⚙ 다이나믹 콘텐츠 설정</span>
+        <span id="sch-dynamic-arrow">▸</span>
+      </div>
+      <div id="sch-dynamic-section" style="display:none">
+        <div class="sch-dynamic-body">
+          <div class="sch-dynamic-guide">
+            사용 가능한 템플릿 변수:<br>
+            <code>{{HOTEL_CARDS}}</code> 호텔 카드 자동 생성<br>
+            <code>{{SEND_MONTH}}</code> 발송 월 (예: 5월)<br>
+            <code>{{NEXT_MONTH}}</code> 다음달 (예: 6월)<br>
+            <code>{{NEXT_MONTH_START}}</code> / <code>{{NEXT_MONTH_END}}</code>
+          </div>
+
+          <div class="fl" style="margin-top:12px">세그먼트 쿼리 <span style="color:#aaa;font-size:10px">(발송 시점 재실행)</span></div>
+          <textarea class="fi sch-query-textarea" id="sch-segment-query" placeholder="SELECT DISTINCT email FROM tripbtoz.users_0519&#10;WHERE mkt_email_agree = 1 AND status = 'AT'&#10;AND email IS NOT NULL AND email != ''"></textarea>
+
+          <div class="fl" style="margin-top:12px">호텔 콘텐츠 쿼리 <span style="color:#aaa;font-size:10px">(결과 → {{HOTEL_CARDS}})</span></div>
+          <textarea class="fi sch-query-textarea" id="sch-content-query" placeholder="SELECT h.id as hotel_id, h.name_kr, h.city_kr, h.star_rating&#10;FROM tripbtoz.hotels h&#10;JOIN tripbtoz.bookings b ON b.hotel_id = h.id&#10;WHERE b.check_in BETWEEN {{NEXT_MONTH_START}} AND {{NEXT_MONTH_END}}&#10;AND h.city_kr IS NOT NULL&#10;GROUP BY h.id ORDER BY COUNT(*) DESC&#10;LIMIT {{LIMIT}}"></textarea>
+
+          <div class="fl" style="margin-top:12px">UTM 캠페인명 <span style="color:#aaa;font-size:10px">(링크 추적용, 선택)</span></div>
+          <input class="fi" id="sch-utm-campaign" placeholder="예: biweekly_may_2026" style="margin-top:4px;font-size:12px">
+
+          <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+            <div class="fl" style="margin:0">호텔 수</div>
+            <div class="sch-limit-group">
+              <label class="sch-limit-btn"><input type="radio" name="sch-limit" value="4"> 4개</label>
+              <label class="sch-limit-btn"><input type="radio" name="sch-limit" value="6" checked> 6개</label>
+              <label class="sch-limit-btn"><input type="radio" name="sch-limit" value="8"> 8개</label>
+            </div>
+            <button class="btn-secondary btn-sm" onclick="previewDynamicContent()" style="margin-left:auto">미리보기</button>
+          </div>
+          <div id="sch-dynamic-preview" style="display:none;margin-top:10px;background:var(--bg3);border-radius:8px;padding:10px;font-size:11px;color:var(--text-dim);max-height:120px;overflow-y:auto"></div>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn-secondary" onclick="closeScheduleModal()">취소</button>
@@ -252,14 +309,44 @@
       <span class="sql-preset-label">빠른 세그먼트</span>
       <div class="sql-preset-group">
         <button class="sql-preset-btn" onclick="runPreset('member')">⚡ 회원 광고수신 동의</button>
+        <span class="preset-info-icon" tabindex="0">?
+          <span class="preset-tooltip">
+            <strong>회원 광고수신 동의</strong><br><br>
+            테이블: <code>tripbtoz.users_0519</code><br>
+            조건 1: <code>mkt_email_agree = 1</code><br>
+            조건 2: <code>status = 'AT'</code> (활성 회원)<br>
+            조건 3: 이메일 값 있는 계정만<br><br>
+            <em>약 857,017명</em>
+          </span>
+        </span>
         <button class="sql-preset-edit-btn" onclick="loadPreset('member')" title="SQL 편집">✎</button>
       </div>
       <div class="sql-preset-group">
         <button class="sql-preset-btn" onclick="runPreset('guest')">⚡ 비회원 광고수신 동의</button>
+        <span class="preset-info-icon" tabindex="0">?
+          <span class="preset-tooltip">
+            <strong>비회원 광고수신 동의</strong><br><br>
+            테이블: <code>checkouts</code> + <code>checkout_detail</code><br>
+            조건 1: <code>user_type = 'guest'</code><br>
+            조건 2: <code>ad_policy_agreement_yn = 1</code><br>
+            조건 3: 이메일 수집된 건만<br><br>
+            <em>약 3,037명</em><br>
+            <em style="color:#f87171">※ 동의 82,940건 중 이메일 미수집 다수</em>
+          </span>
+        </span>
         <button class="sql-preset-edit-btn" onclick="loadPreset('guest')" title="SQL 편집">✎</button>
       </div>
       <div class="sql-preset-group">
         <button class="sql-preset-btn" onclick="runPreset('all')">⚡ 전체 합산</button>
+        <span class="preset-info-icon" tabindex="0">?
+          <span class="preset-tooltip">
+            <strong>전체 합산 (회원 + 비회원)</strong><br><br>
+            회원 광고수신 동의<br>
+            + 비회원 광고수신 동의<br>
+            UNION으로 중복 이메일 제거<br><br>
+            <em>약 860,000명</em>
+          </span>
+        </span>
         <button class="sql-preset-edit-btn" onclick="loadPreset('all')" title="SQL 편집">✎</button>
       </div>
     </div>

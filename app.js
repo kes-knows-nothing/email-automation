@@ -72,8 +72,15 @@ function goList() { showView('list'); }
 
 function newTemplate() {
   currentTplId = null;
-  blocks = [];
   nextId = 1;
+  blocks = [
+    { id: nextId++, type: 'logo',   open: false, data: {} },
+    { id: nextId++, type: 'title',  open: false, data: { text: '이메일 제목을 입력하세요', size: '24' } },
+    { id: nextId++, type: 'text',   open: false, data: { text: '본문 내용을 입력하세요.' } },
+    { id: nextId++, type: 'notice', open: false, data: { n1: '안내 문구 1', n2: '안내 문구 2' } },
+    { id: nextId++, type: 'banner', open: false, data: {} },
+    { id: nextId++, type: 'footer', open: false, data: {} },
+  ];
   document.getElementById('tpl-name-input').value = '';
   showView('editor');
   render(); rp();
@@ -738,31 +745,35 @@ LIMIT ${limit};`;
 
 const SQL_PRESETS = {
   member: `-- 회원 광고수신 동의
+-- 기준: tripbtoz.users_0519 / mkt_email_agree=1 / status=AT(활성)
 SELECT DISTINCT email
-FROM users
+FROM tripbtoz.users_0519
 WHERE mkt_email_agree = 1
-  AND status NOT IN ('STOP', 'DEL');`,
+  AND status = 'AT'
+  AND email IS NOT NULL
+  AND email != '';`,
 
-  guest: `-- 비회원 광고수신 동의 (예약 시 광고수신 동의한 비회원)
-SELECT DISTINCT cd.origin_user_email AS email
-FROM tripbtoz_payment.checkout_detail cd
-WHERE cd.ad_policy_agreement_yn = 1
-  AND cd.origin_user_email IS NOT NULL
-  AND cd.origin_user_email != ''
-  AND cd.checkout_id IN (
-    SELECT id FROM tripbtoz.checkouts WHERE user_type = 'guest'
-  );`,
+  guest: `-- 비회원 광고수신 동의
+-- 기준: 비회원 결제(user_type=guest) + 광고동의(ad_policy_agreement_yn=1) + 이메일 수집분만
+SELECT DISTINCT c.user_email AS email
+FROM tripbtoz.checkouts c
+JOIN tripbtoz_payment.checkout_detail cd ON cd.checkout_id = c.id
+WHERE c.user_type = 'guest'
+  AND cd.ad_policy_agreement_yn = 1
+  AND c.user_email IS NOT NULL
+  AND c.user_email != '';`,
 
-  all: `-- 전체 합산 (회원 광고수신 동의 + 비회원 광고수신 동의)
-SELECT DISTINCT email FROM tripbtoz.users WHERE mkt_email_agree = 1 AND status NOT IN ('STOP', 'DEL')
+  all: `-- 전체 합산 (회원 + 비회원, 중복 제거)
+-- 회원: tripbtoz.users_0519 / mkt_email_agree=1 / status=AT
+-- 비회원: 비회원 결제 + 광고동의 + 이메일 수집분
+SELECT DISTINCT email FROM tripbtoz.users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
 UNION
-SELECT DISTINCT cd.origin_user_email FROM tripbtoz_payment.checkout_detail cd
-WHERE cd.ad_policy_agreement_yn = 1
-  AND cd.origin_user_email IS NOT NULL
-  AND cd.origin_user_email != ''
-  AND cd.checkout_id IN (
-    SELECT id FROM tripbtoz.checkouts WHERE user_type = 'guest'
-  );`,
+SELECT DISTINCT c.user_email FROM tripbtoz.checkouts c
+JOIN tripbtoz_payment.checkout_detail cd ON cd.checkout_id = c.id
+WHERE c.user_type = 'guest'
+  AND cd.ad_policy_agreement_yn = 1
+  AND c.user_email IS NOT NULL
+  AND c.user_email != '';`,
 };
 
 let sqlResultEmails = [];
@@ -1278,11 +1289,17 @@ async function renderDashboard() {
     .select('*').eq('status', 'sent')
     .gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false });
 
-  renderDashSection('dash-pending-list', pending || [], 'pending');
-  renderDashSection('dash-sent-list', sent || [], 'sent');
+  const sentList = sent || [];
+  const totalSent   = sentList.reduce((s, r) => s + (r.sent_count   || 0), 0);
+  const totalFailed = sentList.reduce((s, r) => s + (r.failed_count || 0), 0);
 
-  const total = (pending||[]).length + (sent||[]).length;
-  document.getElementById('dash-sub').textContent = `대기 ${(pending||[]).length}건 · 완료 ${(sent||[]).length}건 (최근 2주)`;
+  document.getElementById('kpi-pending').textContent = `${(pending||[]).length}건`;
+  document.getElementById('kpi-sent').textContent = `${sentList.length}건`;
+  document.getElementById('kpi-total-sent').textContent = totalSent.toLocaleString() + '명';
+  document.getElementById('kpi-total-failed').textContent = totalFailed > 0 ? totalFailed.toLocaleString() + '명' : '0명';
+
+  renderDashSection('dash-pending-list', pending || [], 'pending');
+  renderDashSection('dash-sent-list', sentList, 'sent');
 }
 
 const SCHEDULE_TYPE_LABEL = { once: '1회성', daily: '매일', weekly: '매주', biweekly: '격주', monthly: '매월' };
@@ -1316,11 +1333,20 @@ function renderDashSection(containerId, list, type) {
       ? `<button class="btn-danger btn-sm" onclick="cancelSchedule('${s.id}')">취소</button>
          <button class="btn-schedule btn-sm" onclick="markSent('${s.id}')">발송 완료 처리</button>`
       : '';
+    const sentStats = type === 'sent'
+      ? `<div class="dash-card-stats">
+           <span class="dash-stat-sent">✔ ${(s.sent_count||0).toLocaleString()}명 발송</span>
+           ${s.failed_count > 0 ? `<span class="dash-stat-failed">✘ ${s.failed_count.toLocaleString()}명 실패</span>` : ''}
+         </div>`
+      : '';
     return `<div class="dash-card">
       <div class="dash-card-left">
-        ${badge}
-        <div class="dash-card-tpl">${s.template_name}</div>
-        <div class="dash-card-seg">${s.segment_name ? '→ ' + s.segment_name : '세그먼트 없음'}</div>
+        <div class="dash-card-left-row">
+          ${badge}
+          <div class="dash-card-tpl">${s.template_name}</div>
+        </div>
+        <div class="dash-card-seg">${s.segment_name ? '<span class="dash-arrow">→</span> ' + s.segment_name : '세그먼트 없음'}</div>
+        ${sentStats}
       </div>
       <div class="dash-card-right">
         <div class="dash-card-time">${timeStr}</div>
@@ -1382,6 +1408,35 @@ async function openScheduleModal(tplId, tplName) {
 function closeScheduleModal() {
   document.getElementById('schedule-modal').style.display = 'none';
   _schedTplId = null;
+}
+
+function toggleDynamicSection() {
+  const sec = document.getElementById('sch-dynamic-section');
+  const arrow = document.getElementById('sch-dynamic-arrow');
+  const open = sec.style.display === 'none';
+  sec.style.display = open ? '' : 'none';
+  arrow.textContent = open ? '▾' : '▸';
+}
+
+async function previewDynamicContent() {
+  const contentQuery = document.getElementById('sch-content-query').value.trim();
+  const contentLimit = parseInt(document.querySelector('input[name="sch-limit"]:checked')?.value || '6');
+  const preview = document.getElementById('sch-dynamic-preview');
+  if(!contentQuery) { preview.style.display = 'none'; return; }
+  preview.style.display = '';
+  preview.textContent = '조회 중...';
+  try {
+    const res = await fetch('http://localhost:3001/api/preview-content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentQuery, contentLimit }),
+    });
+    const data = await res.json();
+    if(data.error) { preview.textContent = '오류: ' + data.error; return; }
+    preview.innerHTML = data.hotels.map(h =>
+      `<div style="margin-bottom:4px">• <strong>${h.name_kr||h.name||'-'}</strong> (${h.city_kr||'-'}) ${h.price_available ? `<span style="color:#7B3CFF">${h.discounted_price?.toLocaleString()}원 -${h.discount_rate}%</span>` : '<span style="color:#999">가격미조회</span>'}</div>`
+    ).join('');
+  } catch(e) { preview.textContent = '서버 연결 실패'; }
 }
 
 function onSchTypeChange() {
@@ -1500,14 +1555,23 @@ async function saveSchedule() {
   const subject = document.getElementById('sch-subject').value.trim();
   if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
 
+  const segmentQuery = document.getElementById('sch-segment-query').value.trim() || null;
+  const contentQuery = document.getElementById('sch-content-query').value.trim() || null;
+  const contentLimit = parseInt(document.querySelector('input[name="sch-limit"]:checked')?.value || '6');
+  const utmCampaign  = document.getElementById('sch-utm-campaign').value.trim() || null;
+
   const payload = {
     template_id: _schedTplId,
     template_name: tplName,
     segment_id: segId,
     segment_name: segName,
+    segment_query: segmentQuery,
     subject,
     schedule_type: type,
     status: 'pending',
+    content_query: contentQuery,
+    content_limit: contentLimit,
+    utm_campaign:  utmCampaign,
   };
 
   if(type === 'once') {
