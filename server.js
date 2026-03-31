@@ -36,9 +36,9 @@ function getUnsubUrl(email) {
 
 const DB = {
   host: '127.0.0.1',
-  port: 40008,
+  port: 40007,
   user: 'querypie',
-  password: 'e70610b84f2719b1',
+  password: '30ff83588736c56a',
   database: 'tripbtoz',
   connectTimeout: 10000,
   waitForConnections: true,
@@ -82,7 +82,7 @@ async function runQuery(sql) {
   const conn = await pool.getConnection();
   try {
     const start = Date.now();
-    const [rows, fields] = await conn.execute(sql);
+    const [rows, fields] = await conn.query(sql);
     const elapsed = Date.now() - start;
     if(!fields) return { type: 'ok', affectedRows: rows.affectedRows, elapsed };
     return {
@@ -262,6 +262,63 @@ app.get('/api/send-job/:jobId', (req, res) => {
   const job = sendJobs[req.params.jobId];
   if(!job) return res.status(404).json({ error: 'job not found' });
   res.json(job);
+});
+
+// 호텔 차주 최저가 조회 (내부 pop-api 프록시)
+app.get('/api/hotel-price/:hotelId', async (req, res) => {
+  const { hotelId } = req.params;
+
+  // 차주 월요일 ~ 화요일 (1박)
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun
+  const daysToMonday = (8 - day) % 7 || 7;
+  const checkIn  = new Date(now); checkIn.setDate(now.getDate() + daysToMonday);
+  const checkOut = new Date(checkIn); checkOut.setDate(checkIn.getDate() + 1);
+  const fmt = d => d.toISOString().split('T')[0];
+
+  const url = `${process.env.TRIPBTOZ_API}/v3/hotels/${hotelId}/rooms/rates`;
+  const body = { check_in: fmt(checkIn), check_out: fmt(checkOut), rooms: [{ no: 1, adults: 2 }] };
+  console.log(`[hotel-price] → ${url}`, JSON.stringify(body));
+
+  try {
+    const apiRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept-Language': 'ko-KR' },
+      body: JSON.stringify(body),
+    });
+    console.log(`[hotel-price] ← ${hotelId} status: ${apiRes.status}`);
+
+    if(!apiRes.ok) {
+      const errText = await apiRes.text();
+      console.log(`[hotel-price] ← ${hotelId} error body: ${errText}`);
+      return res.json({ available: false });
+    }
+
+    const data = await apiRes.json();
+    console.log(`[hotel-price] ← ${hotelId} items: ${(data.items||[]).length}`);
+
+    let minRate = null;
+    for(const item of (data.items || [])) {
+      for(const rate of (item.rates || [])) {
+        if(rate.discounted_price > 0 && (!minRate || rate.discounted_price < minRate.discounted_price)) {
+          minRate = { regular_price: rate.regular_price, discounted_price: rate.discounted_price, currency: rate.currency || 'KRW' };
+        }
+      }
+    }
+    if(!minRate) {
+      console.log(`[hotel-price] ← ${hotelId} no valid rates`);
+      return res.json({ available: false });
+    }
+
+    const discount_rate = minRate.regular_price > 0
+      ? Math.round((1 - minRate.discounted_price / minRate.regular_price) * 100)
+      : 0;
+    console.log(`[hotel-price] ← ${hotelId} 최저가: ${minRate.discounted_price} (${discount_rate}% 할인)`);
+    res.json({ available: true, ...minRate, discount_rate, check_in: fmt(checkIn), check_out: fmt(checkOut) });
+  } catch(e) {
+    console.error(`[hotel-price] ← ${hotelId} 예외: ${e.message}`);
+    res.json({ available: false, error: e.message });
+  }
 });
 
 // ═══════════════════════════════════════════

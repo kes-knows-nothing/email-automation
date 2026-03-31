@@ -574,7 +574,12 @@ function renderEditor(b, idx) {
         <div class="hotel-entry-head"><span class="hotel-entry-label">카드 ${hi+1}</span>
           <button class="ba del" onclick="blocks[${idx}].data.hotels.splice(${hi},1);render();rp()">✕</button></div>
         <div class="fl">호텔명</div><input class="fi" value="${esc(h.name)}" oninput="blocks[${idx}].data.hotels[${hi}].name=this.value;rp()">
-        <div class="fl">지역</div><input class="fi" value="${esc(h.area)}" oninput="blocks[${idx}].data.hotels[${hi}].area=this.value;rp()">
+        <div class="fl">지역</div>
+        <select class="fi" onchange="blocks[${idx}].data.hotels[${hi}].area=this.value;rp()">
+          ${['','서울','부산','제주','강원','경기','인천','대구','광주','대전','울산','경주','여수','전주','속초',
+             '도쿄','오사카','교토','후쿠오카','삿포로','방콕','싱가포르','발리','하노이','호치민','홍콩','대만','괌','세부','다낭','코타키나발루']
+            .map(v=>`<option value="${v}" ${h.area===v?'selected':''}>${v||'선택 안함'}</option>`).join('')}
+        </select>
         <div class="fl">가격</div><input class="fi" value="${esc(h.price)}" oninput="blocks[${idx}].data.hotels[${hi}].price=this.value;rp()">
         <div class="fl">이미지 URL</div><input class="fi" placeholder="https://..." value="${esc(h.img)}" oninput="blocks[${idx}].data.hotels[${hi}].img=this.value;rp()">
         <div class="fl">예약 링크</div><input class="fi" value="${esc(h.link)}" oninput="blocks[${idx}].data.hotels[${hi}].link=this.value;rp()">

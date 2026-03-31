@@ -661,12 +661,25 @@ async function searchHotels() {
     dateTo   = `${year}-${mm}-${lastDay}`;
   }
 
+  const nextWeekSub = `(
+    SELECT b2.hotel_id, CONCAT(FORMAT(MIN(p2.fee_sell)/10000, 0), '만원') AS min_price
+    FROM bookings b2
+    JOIN checkouts c2 ON c2.id = b2.checkout_id
+    JOIN payments p2 ON p2.checkout_id = c2.id
+    WHERE b2.check_in >= CURDATE() + INTERVAL (7 - WEEKDAY(CURDATE())) DAY
+      AND b2.check_in <= CURDATE() + INTERVAL (13 - WEEKDAY(CURDATE())) DAY
+      AND p2.currency = 'KRW' AND p2.fee_sell > 0
+    GROUP BY b2.hotel_id
+  ) np`;
+
   let sql;
   if(metric === 'booking') {
-    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail, COUNT(b.id) AS 예약건수
+    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail, COUNT(b.id) AS 예약건수,
+       MAX(np.min_price) AS min_price
 FROM hotels h
 JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
 JOIN bookings b ON b.hotel_id = h.hotel_id
+LEFT JOIN ${nextWeekSub} ON np.hotel_id = h.hotel_id
 WHERE h.city_kr LIKE '%${region}%'
   AND b.check_in >= '${dateFrom}' AND b.check_in <= '${dateTo}'
 GROUP BY h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail
@@ -674,12 +687,14 @@ ORDER BY 예약건수 DESC
 LIMIT ${limit};`;
   } else {
     sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail,
-       CONCAT(FORMAT(SUM(p.fee_sell)/10000, 0), '만원') AS 매출
+       CONCAT(FORMAT(SUM(p.fee_sell)/10000, 0), '만원') AS 매출,
+       MAX(np.min_price) AS min_price
 FROM hotels h
 JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
 JOIN bookings b ON b.hotel_id = h.hotel_id
 JOIN checkouts c ON c.id = b.checkout_id
 JOIN payments p ON p.checkout_id = c.id
+LEFT JOIN ${nextWeekSub} ON np.hotel_id = h.hotel_id
 WHERE h.city_kr LIKE '%${region}%'
   AND b.check_in >= '${dateFrom}' AND b.check_in <= '${dateTo}'
   AND p.currency = 'KRW'
@@ -693,7 +708,7 @@ LIMIT ${limit};`;
 
   const btn = document.querySelector('.hs-btn');
   btn.disabled = true; btn.textContent = '검색 중...';
-  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-bar-text').innerHTML = '';
   document.getElementById('sql-result-body').innerHTML = `<div class="sql-loading">
     <div class="sql-loading-spinner"></div>
     <div class="sql-loading-text">${region} 호텔 검색 중...</div>
@@ -707,14 +722,14 @@ LIMIT ${limit};`;
     });
     const data = await res.json();
     if(data.error) {
-      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">오류</span>`;
+      document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">오류</span>`;
       document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">${data.error}</div>`;
       return;
     }
     const label = month === 0 ? `${year}년` : `${year}년 ${month}월`;
     showSQLResult(data, `<span class="sql-stat-ok">완료</span> ${region} · ${label} · ${data.total}개`);
   } catch(e) {
-    document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
+    document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
     document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요.</div>`;
   } finally {
     btn.disabled = false; btn.textContent = '검색';
@@ -772,7 +787,7 @@ function loadPreset(key) {
 async function runPreset(key) {
   const btn = document.getElementById('sql-run-btn');
   btn.disabled = true; btn.textContent = '실행 중...';
-  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-bar-text').innerHTML = '';
   document.getElementById('sql-result-body').innerHTML = `<div class="sql-loading">
     <div class="sql-loading-spinner"></div>
     <div class="sql-loading-text" id="sql-loading-text">불러오는 중...</div>
@@ -782,7 +797,7 @@ async function runPreset(key) {
     const res = await fetch(`http://localhost:3001/api/preset/${key}`);
     const data = await res.json();
     if(data.error) {
-      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">오류</span>`;
+      document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">오류</span>`;
       document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">${data.error}</div>`;
       return;
     }
@@ -793,7 +808,7 @@ async function runPreset(key) {
 
     showSQLResult(data, `<span class="sql-stat-ok">완료</span> ${data.total.toLocaleString()}행 · ${cachedAgo}`);
   } catch(e) {
-    document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
+    document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
     document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요. <code>npm run dev</code> 실행 중인지 확인하세요.</div>`;
   } finally {
     btn.disabled = false; btn.textContent = '▶ 실행';
@@ -830,8 +845,7 @@ function showSQLResult(data, barHTML) {
 
   let fullBar = barHTML;
   if(emailIdx !== -1) fullBar += ` · 유효 이메일 <strong>${sqlResultEmails.length.toLocaleString()}개</strong>`;
-  document.getElementById('sql-result-bar').innerHTML = fullBar;
-  document.getElementById('sql-result-bar').appendChild(document.getElementById('sql-save-seg-wrap'));
+  document.getElementById('sql-result-bar-text').innerHTML = fullBar;
 
   if(data.rows.length === 0) {
     document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">결과 없음</div>';
@@ -858,18 +872,23 @@ function renderHotelTable(data, hotelIdIdx) {
 
   window._hotelRows   = data.rows;
   window._hotelColMap = { hotelIdIdx, nameIdx, areaIdx, imgIdx, priceIdx };
+  window._hotelPrices = {};
 
   const thead = `<thead><tr>
     <th style="width:36px;text-align:center"><input type="checkbox" id="hotel-check-all" onchange="toggleAllHotels(this)"></th>
     ${cols.map(c => `<th>${c}</th>`).join('')}
+    <th>차주최저가</th><th>할인율</th>
   </tr></thead>`;
 
-  const tbody = `<tbody>${data.rows.slice(0,200).map((row, ri) =>
-    `<tr class="hotel-row" onclick="toggleHotelRow(${ri})">
+  const tbody = `<tbody>${data.rows.slice(0,200).map((row, ri) => {
+    const hid = row[hotelIdIdx];
+    return `<tr class="hotel-row" onclick="toggleHotelRow(${ri})">
       <td style="text-align:center"><input type="checkbox" class="hotel-check" data-idx="${ri}" onclick="event.stopPropagation()" onchange="onHotelCheck()"></td>
       ${row.map(v => `<td>${v===null?'<span class="sql-null">NULL</span>':String(v)}</td>`).join('')}
-    </tr>`
-  ).join('')}</tbody>`;
+      <td class="hotel-price-cell" data-hid="${hid}" style="color:#aaa;font-size:11px">조회중...</td>
+      <td class="hotel-discount-cell" data-hid="${hid}" style="color:#aaa;font-size:11px">-</td>
+    </tr>`;
+  }).join('')}</tbody>`;
 
   document.getElementById('sql-result-body').innerHTML = `
     <div class="sql-hotel-hint">🏨 hotel_id 감지 — 호텔을 선택해서 템플릿에 넣으세요 <span style="color:#bbb">(최대 4개)</span></div>
@@ -878,6 +897,38 @@ function renderHotelTable(data, hotelIdIdx) {
       <button class="sql-add-cart-btn" id="sql-add-cart-btn" onclick="addSelectedToCart()" disabled>🏨 담기</button>
     </div>
     <div class="sql-table-wrap"><table class="sql-table">${thead}${tbody}</table></div>`;
+
+  fetchHotelPrices(data.rows.slice(0, 200).map(r => r[hotelIdIdx]));
+}
+
+async function fetchHotelPrices(hotelIds) {
+  await Promise.all(hotelIds.map(async hid => {
+    try {
+      const res  = await fetch(`http://localhost:3001/api/hotel-price/${hid}`);
+      const data = await res.json();
+      const priceCell    = document.querySelector(`.hotel-price-cell[data-hid="${hid}"]`);
+      const discountCell = document.querySelector(`.hotel-discount-cell[data-hid="${hid}"]`);
+      if(!priceCell) return;
+
+      if(!data.available) {
+        priceCell.innerHTML    = `<span style="color:#ccc">-</span>`;
+        discountCell.innerHTML = `<span style="color:#ccc">-</span>`;
+        return;
+      }
+
+      window._hotelPrices[hid] = data;
+      const priceStr = data.discounted_price >= 10000
+        ? `${Math.round(data.discounted_price / 10000)}만원`
+        : `${Math.round(data.discounted_price).toLocaleString()}원`;
+      priceCell.innerHTML    = `<strong style="color:#333">${priceStr}</strong>`;
+      discountCell.innerHTML = data.discount_rate > 0
+        ? `<span style="color:#e53e3e;font-weight:600">${data.discount_rate}%</span>`
+        : `<span style="color:#ccc">-</span>`;
+    } catch(e) {
+      const priceCell = document.querySelector(`.hotel-price-cell[data-hid="${hid}"]`);
+      if(priceCell) priceCell.innerHTML = `<span style="color:#ccc">-</span>`;
+    }
+  }));
 }
 
 function toggleAllHotels(cb) {
@@ -912,12 +963,20 @@ function addSelectedToCart() {
   cartHotels = [];
   checked.forEach(cb => {
     const row = rows[parseInt(cb.dataset.idx)];
+    const hid = row[hotelIdIdx];
+    const priceData = (window._hotelPrices || {})[hid];
+    let priceStr = priceIdx !== -1 ? String(row[priceIdx] || '') : '';
+    if(priceData && priceData.available) {
+      priceStr = priceData.discounted_price >= 10000
+        ? `${Math.round(priceData.discounted_price / 10000)}만원`
+        : `${Math.round(priceData.discounted_price).toLocaleString()}원`;
+    }
     cartHotels.push({
-      name:  nameIdx  !== -1 ? String(row[nameIdx]  || '') : '',
-      area:  areaIdx  !== -1 ? String(row[areaIdx]  || '') : '',
-      price: priceIdx !== -1 ? String(row[priceIdx] || '') : '',
-      img:   imgIdx   !== -1 ? String(row[imgIdx]   || '') : '',
-      link:  `https://www.tripbtoz.com/hotel/${row[hotelIdIdx]}`,
+      name:  nameIdx !== -1 ? String(row[nameIdx] || '') : '',
+      area:  areaIdx !== -1 ? String(row[areaIdx] || '') : '',
+      price: priceStr,
+      img:   imgIdx  !== -1 ? String(row[imgIdx]  || '') : '',
+      link:  `https://www.tripbtoz.com/hotel/${hid}`,
     });
   });
   updateCartBadge();
@@ -949,7 +1008,7 @@ function initSQLView() {
 
 function clearSQL() {
   document.getElementById('sql-input').value = '';
-  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-bar-text').innerHTML = '';
   document.getElementById('sql-result-body').innerHTML = '<div class="sql-empty">쿼리를 실행하면 결과가 여기에 표시됩니다</div>';
   document.getElementById('sql-input').focus();
 }
@@ -960,7 +1019,7 @@ async function runSQL() {
 
   const btn = document.getElementById('sql-run-btn');
   btn.disabled = true; btn.textContent = '실행 중...';
-  document.getElementById('sql-result-bar').innerHTML = '';
+  document.getElementById('sql-result-bar-text').innerHTML = '';
   document.getElementById('sql-result-body').innerHTML = `<div class="sql-loading">
     <div class="sql-loading-spinner"></div>
     <div class="sql-loading-text" id="sql-loading-text">DB 접속 중...</div>
@@ -982,13 +1041,13 @@ async function runSQL() {
     const data = await res.json();
 
     if(data.error) {
-      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">오류</span>`;
+      document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">오류</span>`;
       document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">${data.error}</div>`;
       return;
     }
 
     if(data.type === 'ok') {
-      document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-ok">완료</span> ${data.affectedRows}행 영향 · ${data.elapsed}ms`;
+      document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-ok">완료</span> ${data.affectedRows}행 영향 · ${data.elapsed}ms`;
       document.getElementById('sql-result-body').innerHTML = '';
       return;
     }
@@ -996,7 +1055,8 @@ async function runSQL() {
     showSQLResult(data, `<span class="sql-stat-ok">완료</span> ${data.total.toLocaleString()}행 · ${data.elapsed}ms`);
   } catch(e) {
     clearInterval(msgTimer);
-    document.getElementById('sql-result-bar').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
+    console.error('[runSQL] 오류:', e.name, e.message, e.stack);
+    document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">연결 실패</span>`;
     document.getElementById('sql-result-body').innerHTML = `<div class="sql-error">서버에 연결할 수 없어요. <code>npm run dev</code> 실행 중인지 확인하세요.</div>`;
   } finally {
     clearInterval(msgTimer);
