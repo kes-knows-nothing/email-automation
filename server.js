@@ -57,22 +57,27 @@ const PRESET_SQLS = {
       AND email IS NOT NULL
       AND email != ''`,
   guest: `
-    SELECT DISTINCT c.user_email AS email
-    FROM tripbtoz.checkouts c
-    JOIN tripbtoz_payment.checkout_detail cd ON cd.checkout_id = c.id
-    WHERE c.user_type = 'guest'
-      AND cd.ad_policy_agreement_yn = 1
-      AND c.user_email IS NOT NULL
-      AND c.user_email != ''`,
+    SELECT DISTINCT bo.email
+    FROM tripbtoz_payment.checkout_detail cd
+    JOIN tripbtoz.checkouts c ON c.id = cd.checkout_id
+    JOIN tripbtoz.bookings b ON b.checkout_id = cd.checkout_id
+    JOIN tripbtoz.bookings_octopus bo ON bo.trxNum = b.booking_code
+    WHERE cd.ad_policy_agreement_yn = 1
+      AND c.user_type = 'guest'
+      AND bo.email IS NOT NULL
+      AND bo.email != ''`,
   all: `
     SELECT DISTINCT email FROM tripbtoz.users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
     UNION
-    SELECT DISTINCT c.user_email FROM tripbtoz.checkouts c
-    JOIN tripbtoz_payment.checkout_detail cd ON cd.checkout_id = c.id
-    WHERE c.user_type = 'guest'
-      AND cd.ad_policy_agreement_yn = 1
-      AND c.user_email IS NOT NULL
-      AND c.user_email != ''`,
+    SELECT DISTINCT bo.email
+    FROM tripbtoz_payment.checkout_detail cd
+    JOIN tripbtoz.checkouts c ON c.id = cd.checkout_id
+    JOIN tripbtoz.bookings b ON b.checkout_id = cd.checkout_id
+    JOIN tripbtoz.bookings_octopus bo ON bo.trxNum = b.booking_code
+    WHERE cd.ad_policy_agreement_yn = 1
+      AND c.user_type = 'guest'
+      AND bo.email IS NOT NULL
+      AND bo.email != ''`,
 };
 
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24시간
@@ -103,8 +108,11 @@ app.get('/api/cities', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const [rows] = await conn.execute(
-      `SELECT DISTINCT city_kr FROM hotels WHERE city_kr LIKE ? AND city_kr IS NOT NULL AND city_kr != '' ORDER BY city_kr LIMIT 20`,
-      [`%${q}%`]
+      `SELECT DISTINCT city_kr FROM hotels
+       WHERE (city_kr LIKE ? OR city LIKE ?)
+         AND city_kr IS NOT NULL AND city_kr != ''
+       ORDER BY city_kr LIMIT 20`,
+      [`%${q}%`, `%${q}%`]
     );
     res.json(rows.map(r => r.city_kr));
   } catch(err) {
@@ -144,6 +152,18 @@ app.get('/api/preset/:key', async (req, res) => {
   }
 });
 
+// 프리셋 수신자 수 조회
+app.get('/api/preset-count/:key', async (req, res) => {
+  const key = req.params.key;
+  if(!PRESET_SQLS[key]) return res.status(404).json({ error: '없는 프리셋입니다' });
+  try {
+    const result = await runQuery(PRESET_SQLS[key]);
+    res.json({ count: result.rows?.length || 0 });
+  } catch(err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // 프리셋 캐시 강제 갱신
 app.delete('/api/preset/:key/cache', async (req, res) => {
   const key = req.params.key;
@@ -178,8 +198,17 @@ function getDateVars() {
 
 function buildHotelUrl(h, utmCampaign) {
   const base = 'https://www.tripbtoz.com/hotels';
-  const checkIn  = h.check_in  || '';
-  const checkOut = h.check_out || '';
+  let checkIn  = h.check_in  || '';
+  let checkOut = h.check_out || '';
+  if (!checkIn || !checkOut) {
+    const now = new Date();
+    const daysToMonday = (8 - now.getDay()) % 7 || 7;
+    const ci = new Date(now); ci.setDate(now.getDate() + daysToMonday);
+    const co = new Date(ci); co.setDate(ci.getDate() + 1);
+    const fmtD = d => d.toISOString().split('T')[0];
+    checkIn  = fmtD(ci);
+    checkOut = fmtD(co);
+  }
   const query = encodeURIComponent(h.name_kr || h.name || '');
   const utm = utmCampaign ? `&utm_source=email&utm_medium=newsletter&utm_campaign=${encodeURIComponent(utmCampaign)}` : '';
   return `${base}/${h.hotel_id}?check-in=${checkIn}&check-out=${checkOut}&rooms=1&room-0-adults=2&room-0-children=0&query=${query}&searchId=${h.hotel_id}&searchType=HOTEL${utm}`;
@@ -190,14 +219,21 @@ function renderHotelCardsHtml(hotels, utmCampaign) {
   const cards = hotels.map(h => {
     const stars = '★'.repeat(Math.floor(parseFloat(h.star_rating) || 0));
     const url = h.hotel_id ? buildHotelUrl(h, utmCampaign) : '#';
-    const discountBadge = h.price_available && h.discount_rate > 0
-      ? `<span style="font-size:11px;color:#f43f5e;background:#fff0f3;padding:2px 7px;border-radius:10px;font-weight:600;">-${h.discount_rate}%</span>`
-      : '';
-    const priceHtml = h.price_available
-      ? `<p style="margin:8px 0 0;font-size:15px;color:#7B3CFF;font-weight:700;">${String(h.discounted_price||0).replace(/\B(?=(\d{3})+(?!\d))/g,',')} 원~ ${discountBadge}</p>
-         <p style="margin:2px 0 0;font-size:11px;color:#bbb;text-decoration:line-through;">${String(h.regular_price||0).replace(/\B(?=(\d{3})+(?!\d))/g,',')} 원</p>`
-      : `<p style="margin:8px 0 0;font-size:15px;color:#ddd;font-weight:700;">가격 정보 없음</p>
-         <p style="margin:2px 0 0;font-size:11px;color:transparent;">-</p>`;
+    const fmt = n => String(n||0).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    let priceHtml;
+    if (h.price_available) {
+      const discountBadge = h.discount_rate > 0
+        ? `<span style="font-size:11px;color:#f43f5e;background:#fff0f3;padding:2px 7px;border-radius:10px;font-weight:600;">-${h.discount_rate}%</span>`
+        : '';
+      const strikethrough = h.discount_rate > 0 && h.regular_price
+        ? `<p style="margin:2px 0 0;font-size:11px;color:#bbb;text-decoration:line-through;">${fmt(h.regular_price)} 원</p>`
+        : '';
+      priceHtml = `<p style="margin:8px 0 0;font-size:15px;color:#7B3CFF;font-weight:700;">${fmt(h.discounted_price)} 원~ ${discountBadge}</p>${strikethrough}`;
+    } else if (h.db_min_price) {
+      priceHtml = `<p style="margin:8px 0 0;font-size:15px;color:#7B3CFF;font-weight:700;">${fmt(h.db_min_price)} 원~</p>`;
+    } else {
+      priceHtml = `<p style="margin:8px 0 0;font-size:15px;color:#ddd;font-weight:700;">가격 정보 없음</p>`;
+    }
     return `<a href="${url}" target="_blank" style="display:inline-block;vertical-align:top;width:240px;margin:8px;background:#fff;border-radius:14px;border:1px solid #e8e8f0;padding:18px;box-shadow:0 2px 12px rgba(0,0,0,0.07);text-decoration:none;transition:box-shadow 0.2s;">
   <div style="font-size:10px;color:#7B3CFF;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px;">${h.city_kr || ''}</div>
   <div style="font-size:13px;font-weight:700;color:#1a1a2e;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${h.name_kr || h.name || ''}</div>
@@ -222,16 +258,18 @@ async function fetchDynamicContent(contentQuery, contentLimit) {
   if(result.type !== 'select' || !result.rows.length) return { ...vars, HOTEL_CARDS: '' };
 
   // hotel_id 컬럼 찾아서 가격 API 호출
-  const hotelIdIdx = result.columns.findIndex(c => c.toLowerCase() === 'hotel_id' || c.toLowerCase() === 'id');
-  const nameIdx    = result.columns.findIndex(c => ['name_kr','name_ko','name'].includes(c.toLowerCase()));
-  const cityIdx    = result.columns.findIndex(c => c.toLowerCase() === 'city_kr');
-  const starIdx    = result.columns.findIndex(c => c.toLowerCase() === 'star_rating');
+  const hotelIdIdx  = result.columns.findIndex(c => c.toLowerCase() === 'hotel_id' || c.toLowerCase() === 'id');
+  const nameIdx     = result.columns.findIndex(c => ['name_kr','name_ko','name'].includes(c.toLowerCase()));
+  const cityIdx     = result.columns.findIndex(c => c.toLowerCase() === 'city_kr');
+  const starIdx     = result.columns.findIndex(c => c.toLowerCase() === 'star_rating');
+  const minPriceIdx = result.columns.findIndex(c => c.toLowerCase() === 'min_price');
 
   const hotels = result.rows.slice(0, contentLimit || 6).map(r => ({
-    hotel_id:   hotelIdIdx >= 0 ? r[hotelIdIdx] : null,
-    name_kr:    nameIdx    >= 0 ? r[nameIdx]    : '',
-    city_kr:    cityIdx    >= 0 ? r[cityIdx]    : '',
-    star_rating: starIdx   >= 0 ? r[starIdx]    : '',
+    hotel_id:    hotelIdIdx  >= 0 ? r[hotelIdIdx]  : null,
+    name_kr:     nameIdx     >= 0 ? r[nameIdx]     : '',
+    city_kr:     cityIdx     >= 0 ? r[cityIdx]     : '',
+    star_rating: starIdx     >= 0 ? r[starIdx]     : '',
+    db_min_price: minPriceIdx >= 0 ? (r[minPriceIdx] ? Number(r[minPriceIdx]) : null) : null,
     price_available: false,
   }));
 
@@ -253,8 +291,9 @@ async function fetchDynamicContent(contentQuery, contentLimit) {
     }));
   }
 
-  console.log(`[content] 호텔 ${hotels.length}개 렌더링`);
-  return { ...vars, HOTEL_CARDS: renderHotelCardsHtml(hotels, contentLimit?._utmCampaign) };
+  const priced = hotels.filter(h => h.price_available || h.db_min_price);
+  console.log(`[content] 호텔 ${priced.length}개 렌더링 (가격 없음 ${hotels.length - priced.length}개 제외)`);
+  return { ...vars, HOTEL_CARDS: renderHotelCardsHtml(priced, contentLimit?._utmCampaign) };
 }
 
 async function fetchDynamicContentWithUTM(contentQuery, contentLimit, utmCampaign) {
@@ -268,16 +307,18 @@ async function fetchDynamicContentWithUTM(contentQuery, contentLimit, utmCampaig
   const result = await runQuery(sql);
   if(result.type !== 'select' || !result.rows.length) return { ...vars, HOTEL_CARDS: '' };
 
-  const hotelIdIdx = result.columns.findIndex(c => c.toLowerCase() === 'hotel_id' || c.toLowerCase() === 'id');
-  const nameIdx    = result.columns.findIndex(c => ['name_kr','name_ko','name'].includes(c.toLowerCase()));
-  const cityIdx    = result.columns.findIndex(c => c.toLowerCase() === 'city_kr');
-  const starIdx    = result.columns.findIndex(c => c.toLowerCase() === 'star_rating');
+  const hotelIdIdx  = result.columns.findIndex(c => c.toLowerCase() === 'hotel_id' || c.toLowerCase() === 'id');
+  const nameIdx     = result.columns.findIndex(c => ['name_kr','name_ko','name'].includes(c.toLowerCase()));
+  const cityIdx     = result.columns.findIndex(c => c.toLowerCase() === 'city_kr');
+  const starIdx     = result.columns.findIndex(c => c.toLowerCase() === 'star_rating');
+  const minPriceIdx = result.columns.findIndex(c => c.toLowerCase() === 'min_price');
 
   const hotels = result.rows.slice(0, contentLimit || 6).map(r => ({
-    hotel_id:    hotelIdIdx >= 0 ? r[hotelIdIdx] : null,
-    name_kr:     nameIdx    >= 0 ? r[nameIdx]    : '',
-    city_kr:     cityIdx    >= 0 ? r[cityIdx]    : '',
-    star_rating: starIdx    >= 0 ? r[starIdx]    : '',
+    hotel_id:    hotelIdIdx  >= 0 ? r[hotelIdIdx]  : null,
+    name_kr:     nameIdx     >= 0 ? r[nameIdx]     : '',
+    city_kr:     cityIdx     >= 0 ? r[cityIdx]     : '',
+    star_rating: starIdx     >= 0 ? r[starIdx]     : '',
+    db_min_price: minPriceIdx >= 0 ? (r[minPriceIdx] ? Number(r[minPriceIdx]) : null) : null,
     price_available: false,
     check_in: '', check_out: '',
   }));
@@ -299,11 +340,12 @@ async function fetchDynamicContentWithUTM(contentQuery, contentLimit, utmCampaig
     }));
   }
 
-  console.log(`[content] 호텔 ${hotels.length}개 렌더링 (UTM: ${utmCampaign || 'none'})`);
-  return { ...vars, HOTEL_CARDS: renderHotelCardsHtml(hotels, utmCampaign) };
+  const priced2 = hotels.filter(h => h.price_available || h.db_min_price);
+  console.log(`[content] 호텔 ${priced2.length}개 렌더링 (가격 없음 ${hotels.length - priced2.length}개 제외) (UTM: ${utmCampaign || 'none'})`);
+  return { ...vars, HOTEL_CARDS: renderHotelCardsHtml(priced2, utmCampaign) };
 }
 
-async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun }) {
+async function executeSend(jobId, { templateId, segmentId, segmentQuery, presetKey, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun }) {
   const job = sendJobs[jobId];
   job.status = 'running';
   job.dryRun = !!dryRun;
@@ -313,8 +355,15 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject
     const { data: tpl, error: tplErr } = await sb.from('templates').select('html,name').eq('id', templateId).single();
     if(tplErr || !tpl) throw new Error('템플릿을 찾을 수 없습니다');
 
-    // 2. 세그먼트 이메일 목록 (segmentQuery 있으면 DB에서 직접 조회, 없으면 저장된 세그먼트 사용)
+    // 2. 세그먼트 이메일 목록
     let emails = [];
+    // presetKey 또는 __PRESET__: 형태 segment_query 처리
+    if(presetKey && PRESET_SQLS[presetKey]) {
+      segmentQuery = PRESET_SQLS[presetKey];
+    } else if(segmentQuery && segmentQuery.startsWith('__PRESET__:')) {
+      const pk = segmentQuery.replace('__PRESET__:', '');
+      if(PRESET_SQLS[pk]) segmentQuery = PRESET_SQLS[pk];
+    }
     if(segmentQuery && segmentQuery.trim()) {
       const result = await runQuery(segmentQuery);
       if(result.type === 'select') {
@@ -473,11 +522,11 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, subject
 
 // 발송 시작
 app.post('/api/send', async (req, res) => {
-  const { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun } = req.body;
+  const { templateId, segmentId, segmentQuery, presetKey, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun } = req.body;
   if(!templateId || !subject) {
     return res.status(400).json({ error: 'templateId, subject 필수' });
   }
-  if(!segmentId && !segmentQuery) {
+  if(!segmentId && !segmentQuery && !presetKey) {
     return res.status(400).json({ error: 'segmentId 또는 segmentQuery 필수' });
   }
   if(!dryRun && !process.env.AWS_ACCESS_KEY_ID) {
@@ -485,7 +534,7 @@ app.post('/api/send', async (req, res) => {
   }
   const jobId = `job_${Date.now()}`;
   sendJobs[jobId] = { status: 'running', sent: 0, failed: 0, total: 0, filtered: 0, errors: [] };
-  executeSend(jobId, { templateId, segmentId, segmentQuery, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun });
+  executeSend(jobId, { templateId, segmentId, segmentQuery, presetKey, subject, fromName, scheduleId, contentQuery, contentLimit, utmCampaign, dryRun });
   res.json({ jobId });
 });
 
@@ -503,16 +552,18 @@ app.post('/api/preview-content', async (req, res) => {
     const qResult = await runQuery(sql);
     if(qResult.type !== 'select') return res.json({ hotels: [] });
 
-    const hotelIdIdx = qResult.columns.findIndex(c => c.toLowerCase() === 'hotel_id' || c.toLowerCase() === 'id');
-    const nameIdx    = qResult.columns.findIndex(c => ['name_kr','name_ko','name'].includes(c.toLowerCase()));
-    const cityIdx    = qResult.columns.findIndex(c => c.toLowerCase() === 'city_kr');
-    const starIdx    = qResult.columns.findIndex(c => c.toLowerCase() === 'star_rating');
+    const hotelIdIdx  = qResult.columns.findIndex(c => c.toLowerCase() === 'hotel_id' || c.toLowerCase() === 'id');
+    const nameIdx     = qResult.columns.findIndex(c => ['name_kr','name_ko','name'].includes(c.toLowerCase()));
+    const cityIdx     = qResult.columns.findIndex(c => c.toLowerCase() === 'city_kr');
+    const starIdx     = qResult.columns.findIndex(c => c.toLowerCase() === 'star_rating');
+    const minPriceIdx = qResult.columns.findIndex(c => c.toLowerCase() === 'min_price');
 
     const hotels = qResult.rows.slice(0, contentLimit || 6).map(r => ({
-      hotel_id:   hotelIdIdx >= 0 ? r[hotelIdIdx] : null,
-      name_kr:    nameIdx    >= 0 ? r[nameIdx]    : '',
-      city_kr:    cityIdx    >= 0 ? r[cityIdx]    : '',
-      star_rating: starIdx   >= 0 ? r[starIdx]    : '',
+      hotel_id:    hotelIdIdx  >= 0 ? r[hotelIdIdx]  : null,
+      name_kr:     nameIdx     >= 0 ? r[nameIdx]     : '',
+      city_kr:     cityIdx     >= 0 ? r[cityIdx]     : '',
+      star_rating: starIdx     >= 0 ? r[starIdx]     : '',
+      db_min_price: minPriceIdx >= 0 ? (r[minPriceIdx] ? Number(r[minPriceIdx]) : null) : null,
       price_available: false,
     }));
 
@@ -521,11 +572,11 @@ app.post('/api/preview-content', async (req, res) => {
         try {
           const apiRes = await fetch(`http://localhost:3001/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(6000) });
           const p = await apiRes.json();
-          if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.discount_rate = p.discount_rate; }
+          if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
         } catch(e) {}
       }));
     }
-    res.json({ hotels });
+    res.json({ hotels: hotels.filter(h => h.price_available || h.db_min_price) });
   } catch(e) {
     res.status(400).json({ error: e.message });
   }

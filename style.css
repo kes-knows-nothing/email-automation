@@ -277,8 +277,9 @@ input[type=file].fi-file { display: none; }
 .sql-preset-edit-btn { font-size: 11px; padding: 4px 8px; border: 1px solid var(--border); border-left: none; border-radius: 0 20px 20px 0; background: var(--bg2); color: var(--text-faint); cursor: pointer; transition: all 0.22s cubic-bezier(0.16,1,0.3,1); }
 .sql-preset-edit-btn:hover { color: var(--accent); border-color: rgba(167,139,250,0.4); transform: translateY(-1px); }
 .preset-info-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--border); font-size: 9px; font-weight: 700; color: var(--text-faint); cursor: default; margin: 0 4px; flex-shrink: 0; }
-.preset-info-icon:hover .preset-tooltip, .preset-info-icon:focus .preset-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
-.preset-tooltip { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(-4px); background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 11px; line-height: 1.7; color: var(--text-dim); white-space: nowrap; z-index: 999; opacity: 0; visibility: hidden; transition: all 0.18s ease; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.preset-info-icon:hover .preset-tooltip, .preset-info-icon:focus .preset-tooltip { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+th .preset-info-icon { overflow: visible; }
+.preset-tooltip { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(-4px); background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 11px; line-height: 1.7; color: var(--text-dim); white-space: normal; min-width: 200px; width: max-content; max-width: 260px; z-index: 9999; opacity: 0; visibility: hidden; transition: all 0.18s ease; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
 .preset-tooltip strong { color: var(--text); font-size: 12px; }
 .preset-tooltip code { background: rgba(167,139,250,0.12); color: var(--accent); padding: 1px 5px; border-radius: 4px; font-family: monospace; font-size: 10px; }
 .preset-tooltip em { color: var(--text-dim); font-style: normal; font-size: 10px; }
@@ -302,7 +303,7 @@ input[type=file].fi-file { display: none; }
 .sql-error code { background: rgba(248,113,113,0.1); padding: 2px 6px; border-radius: 4px; }
 .sql-table-wrap { overflow: auto; }
 .sql-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
-.sql-table thead th { background: var(--bg3); padding: 8px 14px; text-align: left; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border2); position: sticky; top: 0; white-space: nowrap; }
+.sql-table thead th { background: var(--bg3); padding: 8px 14px; text-align: left; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border2); position: sticky; top: 0; white-space: nowrap; overflow: visible; }
 .sql-table td { padding: 7px 14px; border-bottom: 1px solid var(--border2); border-right: 1px solid rgba(42,39,64,0.5); color: var(--text); white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
 .sql-table tbody tr:hover { background: var(--bg3); }
 .sql-null { color: var(--text-faint); font-style: italic; font-size: 11px; }

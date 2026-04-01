@@ -18,8 +18,8 @@
 <!-- ── TOPBAR ── -->
 <div class="topbar">
   <div class="topbar-logo">
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect width="20" height="20" rx="4" fill="#7B3CFF"/><path d="M5 10h10M10 5v10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
-    <span id="topbar-title">트립비토즈 <small>이메일 에디터</small></span>
+    <svg onclick="goTab('list')" style="cursor:pointer;flex-shrink:0" width="20" height="20" viewBox="0 0 20 20" fill="none"><rect width="20" height="20" rx="4" fill="#7B3CFF"/><path d="M5 10h10M10 5v10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+    <span id="topbar-title" onclick="goTab('list')" style="cursor:pointer">트립비토즈 <small>이메일 에디터</small></span>
     <input id="tpl-name-input" placeholder="템플릿 이름 입력..." style="display:none">
   </div>
   <div id="topbar-nav" class="topbar-nav">
@@ -145,9 +145,10 @@
       <input class="fi" id="sch-subject" placeholder="예: [트립비토즈] 7월 특가 호텔 모음" style="margin-top:4px">
 
       <div class="fl" style="margin-top:14px">수신 세그먼트</div>
-      <select class="fi" id="sch-segment" style="margin-top:4px">
+      <select class="fi" id="sch-segment" style="margin-top:4px" onchange="onSchSegmentChange(this)">
         <option value="">세그먼트 선택...</option>
       </select>
+      <div id="sch-segment-status" style="margin-top:4px;min-height:16px"></div>
 
       <div class="fl" style="margin-top:14px">발송 주기</div>
       <div class="sch-type-group" style="margin-top:6px">
@@ -288,7 +289,7 @@
       <span class="sql-preset-label">빠른 세그먼트</span>
       <div class="sql-preset-group">
         <button class="sql-preset-btn" onclick="runPreset('member')">⚡ 회원 광고수신 동의</button>
-        <span class="preset-info-icon" tabindex="0">?
+        <span class="preset-info-icon" tabindex="0">i
           <span class="preset-tooltip">
             <strong>회원 광고수신 동의</strong><br><br>
             테이블: <code>tripbtoz.users_0519</code><br>
@@ -302,22 +303,22 @@
       </div>
       <div class="sql-preset-group">
         <button class="sql-preset-btn" onclick="runPreset('guest')">⚡ 비회원 광고수신 동의</button>
-        <span class="preset-info-icon" tabindex="0">?
+        <span class="preset-info-icon" tabindex="0">i
           <span class="preset-tooltip">
             <strong>비회원 광고수신 동의</strong><br><br>
-            테이블: <code>checkouts</code> + <code>checkout_detail</code><br>
-            조건 1: <code>user_type = 'guest'</code><br>
-            조건 2: <code>ad_policy_agreement_yn = 1</code><br>
-            조건 3: 이메일 수집된 건만<br><br>
-            <em>약 3,037명</em><br>
-            <em style="color:#f87171">※ 동의 82,940건 중 이메일 미수집 다수</em>
+            테이블: <code>checkout_detail</code> → <code>checkouts</code> → <code>bookings</code> → <code>bookings_octopus</code><br><br>
+            조건 1: <code>ad_policy_agreement_yn = 1</code> (광고 수신 동의)<br>
+            조건 2: <code>user_type = 'guest'</code> (비회원)<br>
+            조건 3: <code>bookings_octopus.email</code> 기준 이메일 추출<br><br>
+            <em>약 47,506명</em><br>
+            <em style="color:#aaa">※ 동의 82,838건 중 bookings_octopus에 이메일 없는 건 제외</em>
           </span>
         </span>
         <button class="sql-preset-edit-btn" onclick="loadPreset('guest')" title="SQL 편집">✎</button>
       </div>
       <div class="sql-preset-group">
         <button class="sql-preset-btn" onclick="runPreset('all')">⚡ 전체 합산</button>
-        <span class="preset-info-icon" tabindex="0">?
+        <span class="preset-info-icon" tabindex="0">i
           <span class="preset-tooltip">
             <strong>전체 합산 (회원 + 비회원)</strong><br><br>
             회원 광고수신 동의<br>

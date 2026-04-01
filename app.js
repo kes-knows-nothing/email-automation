@@ -675,7 +675,7 @@ async function searchHotels() {
   }
 
   const nextWeekSub = `(
-    SELECT b2.hotel_id, CONCAT(FORMAT(MIN(p2.fee_sell)/10000, 0), '만원') AS min_price
+    SELECT b2.hotel_id, MIN(p2.fee_sell) AS min_price
     FROM bookings b2
     JOIN checkouts c2 ON c2.id = b2.checkout_id
     JOIN payments p2 ON p2.checkout_id = c2.id
@@ -687,31 +687,33 @@ async function searchHotels() {
 
   let sql;
   if(metric === 'booking') {
-    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail, COUNT(b.id) AS 예약건수,
+    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(b.id) AS 예약건수,
        MAX(np.min_price) AS min_price
 FROM hotels h
-JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
+LEFT JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
 JOIN bookings b ON b.hotel_id = h.hotel_id
 LEFT JOIN ${nextWeekSub} ON np.hotel_id = h.hotel_id
-WHERE h.city_kr LIKE '%${region}%'
+WHERE h.hotel_id IN (SELECT hotel_id FROM hotels WHERE city_kr LIKE '%${region}%' OR city IN (SELECT DISTINCT city FROM hotels WHERE city_kr LIKE '%${region}%'))
   AND b.check_in >= '${dateFrom}' AND b.check_in <= '${dateTo}'
-GROUP BY h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail
+GROUP BY h.hotel_id, h.name_kr, h.city_kr
+HAVING MAX(np.min_price) IS NOT NULL
 ORDER BY 예약건수 DESC
 LIMIT ${limit};`;
   } else {
-    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail,
+    sql = `SELECT h.hotel_id, h.name_kr, h.city_kr, MAX(ac.thumbnail) AS thumbnail,
        CONCAT(FORMAT(SUM(p.fee_sell)/10000, 0), '만원') AS 매출,
        MAX(np.min_price) AS min_price
 FROM hotels h
-JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
+LEFT JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
 JOIN bookings b ON b.hotel_id = h.hotel_id
 JOIN checkouts c ON c.id = b.checkout_id
 JOIN payments p ON p.checkout_id = c.id
 LEFT JOIN ${nextWeekSub} ON np.hotel_id = h.hotel_id
-WHERE h.city_kr LIKE '%${region}%'
+WHERE h.hotel_id IN (SELECT hotel_id FROM hotels WHERE city_kr LIKE '%${region}%' OR city IN (SELECT DISTINCT city FROM hotels WHERE city_kr LIKE '%${region}%'))
   AND b.check_in >= '${dateFrom}' AND b.check_in <= '${dateTo}'
   AND p.currency = 'KRW'
-GROUP BY h.hotel_id, h.name_kr, h.city_kr, ac.thumbnail
+GROUP BY h.hotel_id, h.name_kr, h.city_kr
+HAVING MAX(np.min_price) IS NOT NULL
 ORDER BY SUM(p.fee_sell) DESC
 LIMIT ${limit};`;
   }
@@ -893,8 +895,12 @@ function renderHotelTable(data, hotelIdIdx) {
 
   const thead = `<thead><tr>
     <th style="width:36px;text-align:center"><input type="checkbox" id="hotel-check-all" onchange="toggleAllHotels(this)"></th>
-    ${cols.map(c => `<th>${c}</th>`).join('')}
-    <th>차주최저가</th><th>할인율</th>
+    ${cols.map(c => {
+      if(c.toLowerCase() === 'min_price') return `<th>${c} <span class="preset-info-icon" style="vertical-align:middle">i<span class="preset-tooltip" style="white-space:pre-line">실제 예약 DB 기준&#10;차주(월~일) 체크인 예약 중&#10;최저 결제금액</span></span></th>`;
+      return `<th>${c}</th>`;
+    }).join('')}
+    <th>차주최저가 <span class="preset-info-icon" style="vertical-align:middle">i<span class="preset-tooltip" style="white-space:pre-line">트립비토즈 API 기준&#10;차주 월요일 체크인 1박 2인&#10;현재 판매 중인 실시간 최저가</span></span></th>
+    <th>할인율 <span class="preset-info-icon" style="vertical-align:middle">i<span class="preset-tooltip" style="white-space:pre-line">정가 대비 할인된 비율&#10;(정가 - 판매가) / 정가 × 100</span></span></th>
   </tr></thead>`;
 
   const tbody = `<tbody>${data.rows.slice(0,200).map((row, ri) => {
@@ -984,19 +990,33 @@ function addSelectedToCart() {
     const priceData = (window._hotelPrices || {})[hid];
     let priceNum = 0;
     let discountNum = 0;
+    let checkIn = '';
+    let checkOut = '';
     if(priceData && priceData.available) {
       priceNum    = priceData.discounted_price || 0;
       discountNum = priceData.discount_rate    || 0;
+      checkIn     = priceData.check_in  || '';
+      checkOut    = priceData.check_out || '';
     } else if(priceIdx !== -1 && row[priceIdx]) {
-      priceNum = parseInt(String(row[priceIdx]).replace(/[^0-9]/g, '')) || 0;
+      priceNum = Math.round(parseFloat(String(row[priceIdx]))) || 0;
     }
+    if(!checkIn || !checkOut) {
+      const now = new Date();
+      const daysToMonday = (8 - now.getDay()) % 7 || 7;
+      const ci = new Date(now); ci.setDate(now.getDate() + daysToMonday);
+      const co = new Date(ci); co.setDate(ci.getDate() + 1);
+      const fmtD = d => d.toISOString().split('T')[0];
+      checkIn  = fmtD(ci);
+      checkOut = fmtD(co);
+    }
+    const hotelName = nameIdx !== -1 ? String(row[nameIdx] || '') : '';
     cartHotels.push({
-      name:     nameIdx !== -1 ? String(row[nameIdx] || '') : '',
+      name:     hotelName,
       area:     areaIdx !== -1 ? String(row[areaIdx] || '') : '',
       price:    priceNum,
       discount: discountNum,
       img:      imgIdx  !== -1 ? String(row[imgIdx]  || '') : '',
-      link:     `https://www.tripbtoz.com/hotel/${hid}`,
+      link:     `https://www.tripbtoz.com/hotels/${hid}?check-in=${checkIn}&check-out=${checkOut}&rooms=1&room-0-adults=2&room-0-children=0&query=${encodeURIComponent(hotelName)}&searchId=${hid}&searchType=HOTEL`,
     });
   });
   updateCartBadge();
@@ -1438,8 +1458,16 @@ async function openScheduleModal(tplId, tplName) {
   // 세그먼트 목록 로드
   const { data: segs } = await sb.from('segments').select('id,name').order('created_at', { ascending: false });
   const sel = document.getElementById('sch-segment');
-  sel.innerHTML = '<option value="">세그먼트 선택...</option>' +
-    (segs||[]).map(s => `<option value="${s.id}" data-name="${s.name}">${s.name}</option>`).join('');
+  sel.innerHTML = `<option value="">세그먼트 선택...</option>
+    <optgroup label="── 광고수신 동의 ──">
+      <option value="__preset_member__" data-name="회원 광고수신 동의">⚡ 회원 광고수신 동의</option>
+      <option value="__preset_guest__" data-name="비회원 광고수신 동의">⚡ 비회원 광고수신 동의</option>
+      <option value="__preset_all__" data-name="전체 광고수신 동의">⚡ 전체 광고수신 동의</option>
+    </optgroup>
+    <optgroup label="── 저장된 세그먼트 ──">
+      ${(segs||[]).map(s => `<option value="${s.id}" data-name="${s.name}">${s.name}</option>`).join('')}
+    </optgroup>`;
+  document.getElementById('sch-segment-status').textContent = '';
 
   // 매월 일수 채우기
   const daysSel = document.getElementById('sch-monthly-day');
@@ -1514,10 +1542,38 @@ async function previewDynamicContent() {
     });
     const data = await res.json();
     if(data.error) { preview.textContent = '오류: ' + data.error; return; }
-    preview.innerHTML = data.hotels.map(h =>
-      `<div style="margin-bottom:4px">• <strong>${h.name_kr||h.name||'-'}</strong> (${h.city_kr||'-'}) ${h.price_available ? `<span style="color:#7B3CFF">${h.discounted_price?.toLocaleString()}원 -${h.discount_rate}%</span>` : '<span style="color:#999">가격미조회</span>'}</div>`
-    ).join('');
+    preview.innerHTML = data.hotels.map(h => {
+      let priceLabel;
+      if (h.price_available) {
+        priceLabel = `<span style="color:#7B3CFF">${h.discounted_price?.toLocaleString()}원${h.discount_rate > 0 ? ` -${h.discount_rate}%` : ''}</span>`;
+      } else if (h.db_min_price) {
+        priceLabel = `<span style="color:#7B3CFF">${Number(h.db_min_price).toLocaleString()}원~</span>`;
+      } else {
+        priceLabel = '<span style="color:#999">가격미조회</span>';
+      }
+      return `<div style="margin-bottom:4px">• <strong>${h.name_kr||h.name||'-'}</strong> (${h.city_kr||'-'}) ${priceLabel}</div>`;
+    }).join('');
   } catch(e) { preview.textContent = '서버 연결 실패'; }
+}
+
+const PRESET_LABELS = { member: '회원 광고수신 동의', guest: '비회원 광고수신 동의', all: '전체 광고수신 동의' };
+
+async function onSchSegmentChange(sel) {
+  const val = sel.value;
+  const statusEl = document.getElementById('sch-segment-status');
+  if(!val || !val.startsWith('__preset_')) { statusEl.textContent = ''; return; }
+  const key = val.replace('__preset_', '').replace('__', '');
+  const label = PRESET_LABELS[key] || key;
+  statusEl.innerHTML = `<span style="color:#7B3CFF;font-size:11px">🔍 ${label} 수신자 수 확인 중이에요...</span>`;
+  try {
+    const res = await fetch(`http://localhost:3001/api/preset-count/${key}`);
+    const { count, error } = await res.json();
+    if(error) throw new Error(error);
+    statusEl.innerHTML = `<span style="color:#4ade80;font-size:11px">✅ ${count.toLocaleString()}명 준비됐어요!</span>`;
+    showToast(`🎉 ${label} ${count.toLocaleString()}명 확인 완료!`);
+  } catch(e) {
+    statusEl.innerHTML = `<span style="color:#f87171;font-size:11px">⚠️ 수신자 수 확인 실패</span>`;
+  }
 }
 
 function onSchTypeChange() {
@@ -1531,8 +1587,11 @@ function onSchTypeChange() {
 async function sendNow(dryRun = false) {
   const subject = document.getElementById('sch-subject').value.trim();
   const segSel = document.getElementById('sch-segment');
-  const segId = segSel.value || null;
-  const segName = segId ? segSel.options[segSel.selectedIndex].dataset.name : '';
+  const segRaw = segSel.value || null;
+  const isPreset = segRaw && segRaw.startsWith('__preset_');
+  const presetKey = isPreset ? segRaw.replace('__preset_', '').replace('__', '') : null;
+  const segId = (!isPreset && segRaw) ? segRaw : null;
+  const segName = segSel.options[segSel.selectedIndex]?.dataset.name || '';
   const segmentQuery = document.getElementById('sch-segment-query').value.trim() || null;
   const contentQuery = document.getElementById('sch-content-query').value.trim() || null;
   const contentLimit = parseInt(document.querySelector('input[name="sch-limit"]:checked')?.value || '6');
@@ -1540,7 +1599,7 @@ async function sendNow(dryRun = false) {
 
   if(!_schedTplId) { showToast('템플릿 정보가 없습니다'); return; }
   if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
-  if(!segId && !segmentQuery) { showToast('세그먼트를 선택하거나 세그먼트 쿼리를 입력해주세요'); return; }
+  if(!segId && !segmentQuery && !presetKey) { showToast('세그먼트를 선택하거나 세그먼트 쿼리를 입력해주세요'); return; }
 
   const tplName = document.getElementById('sch-tpl-name').textContent;
   if(!dryRun && !confirm(`"${tplName}" 을 "${segName || '다이나믹 세그먼트'}" 에게 지금 바로 발송할까요?`)) return;
@@ -1558,7 +1617,7 @@ async function sendNow(dryRun = false) {
       const { data: sch, error: schErr } = await sb.from('email_schedules').insert({
         template_id: templateId,
         template_name: tplNameFinal,
-        segment_name: segName || '다이나믹 세그먼트',
+        segment_name: segName || presetKey || '다이나믹 세그먼트',
         subject,
         schedule_type: 'once',
         scheduled_at: now,
@@ -1573,7 +1632,7 @@ async function sendNow(dryRun = false) {
     const res = await fetch('http://localhost:3001/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ templateId, segmentId: segId, segmentQuery, subject, contentQuery, contentLimit, utmCampaign, dryRun, scheduleId }),
+      body: JSON.stringify({ templateId, segmentId: segId, segmentQuery, presetKey, subject, contentQuery, contentLimit, utmCampaign, dryRun, scheduleId }),
     });
     const { jobId, error } = await res.json();
     if(error) { setSendProgressError(error); return; }
@@ -1652,8 +1711,11 @@ async function pollSendJob(jobId, dryRun = false) {
 async function saveSchedule() {
   const type = document.querySelector('input[name="sch-type"]:checked')?.value;
   const segSel = document.getElementById('sch-segment');
-  const segId = segSel.value || null;
-  const segName = segId ? segSel.options[segSel.selectedIndex].dataset.name : null;
+  const segRaw = segSel.value || null;
+  const isPreset = segRaw && segRaw.startsWith('__preset_');
+  const presetKey = isPreset ? segRaw.replace('__preset_', '').replace('__', '') : null;
+  const segId = (!isPreset && segRaw) ? segRaw : null;
+  const segName = segSel.options[segSel.selectedIndex]?.dataset.name || null;
   const tplName = document.getElementById('sch-tpl-name').textContent;
 
   if(!_schedTplId) return;
@@ -1666,6 +1728,7 @@ async function saveSchedule() {
     template_name: tplName,
     segment_id: segId ? String(segId) : null,
     segment_name: segName,
+    segment_query: presetKey ? `__PRESET__:${presetKey}` : null,
     subject,
     schedule_type: type,
     status: 'pending',
@@ -1878,9 +1941,17 @@ async function autoPreviewContent() {
     });
     const data = await res.json();
     if(data.error) { preview.textContent = '오류: ' + data.error; return; }
-    preview.innerHTML = data.hotels.map(h =>
-      `<div style="margin-bottom:4px">• <strong>${h.name_kr || h.name || '-'}</strong> (${h.city_kr || '-'}) ${h.price_available ? `<span style="color:var(--accent)">${h.discounted_price?.toLocaleString()}원 -${h.discount_rate}%</span>` : '<span style="color:#666">가격미조회</span>'}</div>`
-    ).join('');
+    preview.innerHTML = data.hotels.map(h => {
+      let priceLabel;
+      if (h.price_available) {
+        priceLabel = `<span style="color:var(--accent)">${h.discounted_price?.toLocaleString()}원${h.discount_rate > 0 ? ` -${h.discount_rate}%` : ''}</span>`;
+      } else if (h.db_min_price) {
+        priceLabel = `<span style="color:var(--accent)">${Number(h.db_min_price).toLocaleString()}원~</span>`;
+      } else {
+        priceLabel = '<span style="color:#666">가격미조회</span>';
+      }
+      return `<div style="margin-bottom:4px">• <strong>${h.name_kr || h.name || '-'}</strong> (${h.city_kr || '-'}) ${priceLabel}</div>`;
+    }).join('');
   } catch(e) { preview.textContent = '서버 연결 실패'; }
 }
 
