@@ -107,6 +107,8 @@ async function runQuery(sql) {
   }
 }
 
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
 // 도시 검색 자동완성
 app.get('/api/cities', async (req, res) => {
   const q = (req.query.q || '').trim();
