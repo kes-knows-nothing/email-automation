@@ -752,4 +752,5 @@ async function runDueSchedules() {
 
 setInterval(runDueSchedules, 60 * 1000);
 
-app.listen(3001, () => console.log('API server running on http://localhost:3001'));
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`API server running on port ${PORT}`));
