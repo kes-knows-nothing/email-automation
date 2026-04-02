@@ -2,6 +2,7 @@
   "name": "email-automation",
   "version": "1.0.0",
   "scripts": {
+    "start": "node server.js",
     "dev": "concurrently \"npx live-server --port=3000 --open=index.html\" \"node server.js\"",
     "server": "node server.js"
   },
