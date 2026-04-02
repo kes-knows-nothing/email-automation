@@ -1,4 +1,11 @@
 // ═══════════════════════════════════════════
+// API BASE URL
+// ═══════════════════════════════════════════
+const API_BASE = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+  ? ''
+  : 'https://email-automation-production-b468.up.railway.app';
+
+// ═══════════════════════════════════════════
 // STORAGE (Supabase)
 // ═══════════════════════════════════════════
 const SUPABASE_URL = 'https://vihwzugbrulsxbembkby.supabase.co';
@@ -619,7 +626,7 @@ async function onCityInput(q) {
   if(!q) { hideCityDropdown(); return; }
   cityDebounce = setTimeout(async () => {
     try {
-      const res = await fetch(`http://localhost:3001/api/cities?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`${API_BASE}/api/cities?q=${encodeURIComponent(q)}`);
       const cities = await res.json();
       renderCityDropdown(cities, q);
     } catch { hideCityDropdown(); }
@@ -767,7 +774,7 @@ LIMIT ${limit};`;
   </div>`;
 
   try {
-    const res = await fetch('http://localhost:3001/api/query', {
+    const res = await fetch(API_BASE + '/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sql }),
@@ -850,7 +857,7 @@ async function runPreset(key) {
   </div>`;
 
   try {
-    const res = await fetch(`http://localhost:3001/api/preset/${key}`);
+    const res = await fetch(`${API_BASE}/api/preset/${key}`);
     const data = await res.json();
     if(data.error) {
       document.getElementById('sql-result-bar-text').innerHTML = `<span class="sql-stat-err">오류</span>`;
@@ -872,7 +879,7 @@ async function runPreset(key) {
 }
 
 async function refreshPreset(key) {
-  await fetch(`http://localhost:3001/api/preset/${key}/cache`, { method: 'DELETE' });
+  await fetch(`${API_BASE}/api/preset/${key}/cache`, { method: 'DELETE' });
   runPreset(key);
 }
 
@@ -964,7 +971,7 @@ function renderHotelTable(data, hotelIdIdx) {
 async function fetchHotelPrices(hotelIds) {
   await Promise.all(hotelIds.map(async hid => {
     try {
-      const res  = await fetch(`http://localhost:3001/api/hotel-price/${hid}`);
+      const res  = await fetch(`${API_BASE}/api/hotel-price/${hid}`);
       const data = await res.json();
       const priceCell    = document.querySelector(`.hotel-price-cell[data-hid="${hid}"]`);
       const discountCell = document.querySelector(`.hotel-discount-cell[data-hid="${hid}"]`);
@@ -1104,7 +1111,7 @@ async function runSQL() {
   }, 800);
 
   try {
-    const res = await fetch('http://localhost:3001/api/query', {
+    const res = await fetch(API_BASE + '/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sql }),
@@ -1465,7 +1472,7 @@ async function openCampaignStats(scheduleId, subject, sentCount) {
   modal.style.display = 'flex';
 
   try {
-    const res  = await fetch(`http://localhost:3001/api/campaign-stats/${scheduleId}`);
+    const res  = await fetch(`${API_BASE}/api/campaign-stats/${scheduleId}`);
     const data = await res.json();
     const { opens, clicks, totalClicks, urlStats } = data;
     const openRate  = sentCount > 0 ? (opens  / sentCount * 100).toFixed(1) : 0;
@@ -1648,7 +1655,7 @@ async function previewDynamicContent() {
   preview.style.display = '';
   preview.textContent = '조회 중...';
   try {
-    const res = await fetch('http://localhost:3001/api/preview-content', {
+    const res = await fetch(API_BASE + '/api/preview-content', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contentQuery, contentLimit }),
@@ -1679,7 +1686,7 @@ async function onSchSegmentChange(sel) {
   const label = PRESET_LABELS[key] || key;
   statusEl.innerHTML = `<span style="color:#7B3CFF;font-size:11px">🔍 ${label} 수신자 수 확인 중이에요...</span>`;
   try {
-    const res = await fetch(`http://localhost:3001/api/preset-count/${key}`);
+    const res = await fetch(`${API_BASE}/api/preset-count/${key}`);
     const { count, error } = await res.json();
     if(error) throw new Error(error);
     statusEl.innerHTML = `<span style="color:#4ade80;font-size:11px">✅ ${count.toLocaleString()}명 준비됐어요!</span>`;
@@ -1742,7 +1749,7 @@ async function sendNow(dryRun = false) {
       console.log('[sendNow] scheduleId:', scheduleId);
     }
 
-    const res = await fetch('http://localhost:3001/api/send', {
+    const res = await fetch(API_BASE + '/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ templateId, segmentId: segId, segmentQuery, presetKey, subject, contentQuery, contentLimit, utmCampaign, dryRun, scheduleId }),
@@ -1777,7 +1784,7 @@ function setSendProgressError(msg) {
 async function pollSendJob(jobId, dryRun = false) {
   const poll = async () => {
     try {
-      const res = await fetch(`http://localhost:3001/api/send-job/${jobId}`);
+      const res = await fetch(`${API_BASE}/api/send-job/${jobId}`);
       const job = await res.json();
 
       if(!dryRun) {
@@ -2022,7 +2029,7 @@ async function autoCheckRecipients() {
   badge.textContent = '확인 중...';
   badgeRight.style.display = 'none';
   try {
-    const res = await fetch('http://localhost:3001/api/query', {
+    const res = await fetch(API_BASE + '/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sql }),
@@ -2047,7 +2054,7 @@ async function autoPreviewContent() {
   preview.style.display = '';
   preview.textContent = '조회 중...';
   try {
-    const res = await fetch('http://localhost:3001/api/preview-content', {
+    const res = await fetch(API_BASE + '/api/preview-content', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contentQuery, contentLimit }),
@@ -2202,7 +2209,7 @@ async function autoSendNow(dryRun = false) {
       scheduleId = sch?.id || null;
     }
 
-    const res = await fetch('http://localhost:3001/api/send', {
+    const res = await fetch(API_BASE + '/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ templateId, segmentId: null, segmentQuery, subject, contentQuery, contentLimit, utmCampaign, dryRun, scheduleId }),
