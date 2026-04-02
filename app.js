@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════
 const API_BASE = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
   ? ''
-  : 'https://email-automation-production-b468.up.railway.app';
+  : 'https://email-automation-production-7cba.up.railway.app';
 
 // ═══════════════════════════════════════════
 // STORAGE (Supabase)
