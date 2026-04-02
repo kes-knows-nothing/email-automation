@@ -5,42 +5,6 @@ const SUPABASE_URL = 'https://vihwzugbrulsxbembkby.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpaHd6dWdicnVsc3hiZW1ia2J5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ1MTI1NjAsImV4cCI6MjA5MDA4ODU2MH0.Gnh1verFEqdCD77puXRL3CA3vAu1oaW7DGxxyzlqv5U';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-function getSettings() {
-  try {
-    return JSON.parse(localStorage.getItem('tb_settings') || 'null') || {
-      phone: '02-711-6880',
-      company: '주식회사 트립비토즈 | 대표이사 : 정지하 | 사업자등록번호 : 778-86-00179',
-      address: '(06160) 서울시 강남구 테헤란로 415, L7 빌딩',
-      website: 'https://www.tripbtoz.com/',
-      websiteLabel: 'www.tripbtoz.com — 모든 여행자가 만나는 세상, 트립비토즈'
-    };
-  } catch { return {}; }
-}
-function setSettings(s) { localStorage.setItem('tb_settings', JSON.stringify(s)); }
-
-function openSettings() {
-  const s = getSettings();
-  document.getElementById('s-phone').value = s.phone || '';
-  document.getElementById('s-company').value = s.company || '';
-  document.getElementById('s-address').value = s.address || '';
-  document.getElementById('s-website').value = s.website || '';
-  document.getElementById('s-websiteLabel').value = s.websiteLabel || '';
-  document.getElementById('settings-modal').style.display = 'flex';
-}
-function closeSettings() { document.getElementById('settings-modal').style.display = 'none'; }
-function closeSettingsOverlay(e) { if(e.target === e.currentTarget) closeSettings(); }
-function saveSettings() {
-  setSettings({
-    phone: document.getElementById('s-phone').value.trim(),
-    company: document.getElementById('s-company').value.trim(),
-    address: document.getElementById('s-address').value.trim(),
-    website: document.getElementById('s-website').value.trim(),
-    websiteLabel: document.getElementById('s-websiteLabel').value.trim()
-  });
-  closeSettings();
-  showToast('설정 저장됨');
-  rp();
-}
 
 // ═══════════════════════════════════════════
 // VIEW SWITCHING
@@ -56,6 +20,8 @@ function showView(name) {
   document.getElementById('topbar-editor-actions').style.flexDirection = 'row';
   document.getElementById('tpl-name-input').style.display = isEditor ? 'block' : 'none';
   document.getElementById('topbar-nav').style.display = isEditor ? 'none' : 'flex';
+  document.getElementById('topbar-logo').style.display = isEditor ? 'none' : 'flex';
+  document.getElementById('topbar-back-btn').style.display = isEditor ? 'inline-flex' : 'none';
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   const navMap = { list: 'nav-template', dashboard: 'nav-dashboard', segment: 'nav-segment', sql: 'nav-sql', automation: 'nav-automation' };
   if(navMap[name]) document.getElementById(navMap[name]).classList.add('active');
@@ -170,7 +136,7 @@ async function deleteTemplate(id) {
 // EDITOR — BLOCK ENGINE
 // ═══════════════════════════════════════════
 const BLOCK_NAMES = {
-  logo:'로고', title:'타이틀', text:'텍스트', highlight:'강조박스',
+  logo:'로고', title:'타이틀', subtitle:'서브타이틀', text:'텍스트', highlight:'강조박스',
   hotels:'호텔그리드', reservation:'예약내역표', cta:'버튼(CTA)', divider:'구분선',
   notice:'안내사항', imagemap:'이미지+링크', banner:'앱배너', footer:'푸터'
 };
@@ -179,7 +145,7 @@ let blocks = [], nextId = 1, sortable = null;
 
 function addBlock(type) {
   const defaults = {
-    logo:{}, title:{text:'새 타이틀', size:'24'}, text:{text:'텍스트를 입력하세요.'},
+    logo:{}, title:{text:'새 타이틀', size:'24'}, subtitle:{text:'서브타이틀을 입력하세요', size:'18'}, text:{text:'텍스트를 입력하세요.'},
     highlight:{label:'강조 문구', sublabel:''},
     hotels:{hotels:[{name:'',area:'',price:'',img:'',link:''}]},
     reservation:{title:'예약 내역', rows:[
@@ -222,6 +188,7 @@ function toggleBlock(idx) {
 function getSummary(b) {
   if(!b.data) return '';
   if(b.type==='title') return b.data.text?.split('\n')[0]||'';
+  if(b.type==='subtitle') return b.data.text?.split('\n')[0]||'';
   if(b.type==='text') return (b.data.text||'').substring(0,50);
   if(b.type==='highlight') return b.data.label||'';
   if(b.type==='cta') return b.data.text||'';
@@ -238,12 +205,29 @@ function esc(str) {
 
 function renderEditor(b, idx) {
   const t = b.type;
-  if(['logo','divider','banner','footer'].includes(t)) return '<div class="no-edit-note">편집 항목 없음 — 고정 블록</div>';
+  if(['logo','divider','banner'].includes(t)) return '<div class="no-edit-note">편집 항목 없음 — 고정 블록</div>';
+  if(t==='footer') return `
+    <div class="fl">푸터 유형</div>
+    <div class="fv" style="display:flex;gap:8px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="footer-type-${b.id}" value="marketing" ${(b.data.footerType||'marketing')==='marketing'?'checked':''} onchange="blocks[${idx}].data.footerType=this.value;render();rp()">
+        <span style="font-size:13px">광고성 (수신거부 포함)</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="footer-type-${b.id}" value="info" ${b.data.footerType==='info'?'checked':''} onchange="blocks[${idx}].data.footerType=this.value;render();rp()">
+        <span style="font-size:13px">일반 정보성</span>
+      </label>
+    </div>`;
   if(t==='title') return `
     <div class="fl">제목 텍스트</div>
     <textarea class="fi" rows="3" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
     <div class="fl">폰트 크기 (px)</div>
     <input class="fi" type="number" value="${b.data.size||24}" min="14" max="40" oninput="blocks[${idx}].data.size=this.value;rp()">`;
+  if(t==='subtitle') return `
+    <div class="fl">서브타이틀 텍스트</div>
+    <textarea class="fi" rows="3" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
+    <div class="fl">폰트 크기 (px)</div>
+    <input class="fi" type="number" value="${b.data.size||18}" min="12" max="32" oninput="blocks[${idx}].data.size=this.value;rp()">`;
   if(t==='text') return `
     <div class="fl">본문</div>
     <textarea class="fi" rows="5" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>`;
@@ -405,10 +389,63 @@ function blockToHTML(b) {
   if(b.type==='divider') return `<tr><td style="padding:0 32px"><div style="height:1px;background:#eee"></div></td></tr>`;
   if(b.type==='banner') return `<tr><td align="center" style="padding:20px 0"><img src="https://asset.tripbtoz.com/email/mail_mange_templates/banner.jpg" width="536" style="display:inline-block;border:0"></td></tr>`;
   if(b.type==='footer') {
-    const s = getSettings();
-    return `<tr><td style="padding:24px 32px 40px;font-size:12px;color:#a0a0a0;line-height:20px;${FF}">본 메일은 발신 전용 메일입니다.<br>도움이 필요하신가요? <b>고객센터(${s.phone})</b>으로 문의해주세요.<br><br>${s.company}<br>${s.address}<br>Copyright (c) 2015. Tripbtoz, Inc. All Rights Reserved.<br><br><a href="${s.website}" style="color:#b3b3b3;text-decoration:none">${s.websiteLabel}</a></td></tr>`;
+    const isMarketing = (b.data.footerType || 'marketing') === 'marketing';
+    if(isMarketing) {
+      return `<tr><td style="padding:32px 0">
+<table style="max-width:600px;min-width:320px;width:100%;margin:0 auto;color:#222;word-break:keep-all;"><tbody>
+<tr><td width="32"></td><td style="padding-bottom:10px;font-size:12px;color:#a0a0a0;line-height:20px;vertical-align:top;${FF}">
+<p>본 메일은 정보통신망 이용 촉진 및 정보 보호 등에 관한 법률 시행 규칙에 의거하여 <br>2024년 6월 3일 트립비토즈 회원님의 이메일 수신동의 여부를 확인 후 보내드리고 있습니다.<br>광고정보수신 정보의 변경을 원하시는 경우, [트립비토즈 앱 - 마이 탭 - 설정]에서 광고 수신을 거부하실 수 있습니다.</p>
+<p>메일 수신을 원치 않으시면 <a href="{{UNSUB_URL}}" target="_blank" style="color:#B3B3B3;">[수신거부]</a>를 클릭하세요.</p>
+</td></tr>
+<tr><td width="32"></td><td style="padding-bottom:10px;font-size:12px;color:#a0a0a0;line-height:18px;vertical-align:top;${FF}">
+주식회사 트립비토즈 &nbsp;|&nbsp; 대표이사 : 정지하 &nbsp;|&nbsp;사업자등록번호 : 778-86-00179<br>
+(06160) 서울시 강남구 테헤란로 415, L7 빌딩<br>
+Copyright (c) 2015. Tripbtoz, Inc. All Rights Reserved.
+</td></tr>
+<tr><td width="32"></td><td style="font-size:12px;color:#a0a0a0;line-height:22px;vertical-align:top;${FF}">
+<a href="https://www.tripbtoz.com/" target="_blank" style="color:#B3B3B3;">www.tripbtoz.com</a><br>
+모든 여행자가 만나는 세상, 트립비토즈
+</td></tr>
+<tr><td width="32"></td><td style="padding-top:12px;vertical-align:top;">
+<table cellpadding="0" cellspacing="0"><tbody><tr>
+<td style="padding-right:8px"><a href="https://www.instagram.com/tripbtoz" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_Instagram.png" width="32" height="32" border="0"></a></td>
+<td style="padding-right:8px"><a href="https://www.facebook.com/Tripbtoz" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_facebook.png" width="32" height="32" border="0"></a></td>
+<td style="padding-right:8px"><a href="https://www.youtube.com/c/%ED%8A%B8%EB%A6%BD%EB%B9%84%ED%86%A0%EC%A6%88" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_youtube.png" width="32" height="32" border="0"></a></td>
+<td style="padding-right:8px"><a href="https://blog.naver.com/tripbtoz" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_blog.png" width="32" height="32" border="0"></a></td>
+</tr></tbody></table>
+</td></tr>
+</tbody></table>
+</td></tr>`;
+    } else {
+      return `<tr><td style="padding:32px 0">
+<table style="max-width:600px;min-width:320px;width:100%;margin:0 auto;color:#222;word-break:keep-all"><tbody>
+<tr><td width="32"></td><td style="padding-bottom:10px;font-size:12px;color:#a0a0a0;line-height:20px;vertical-align:top;${FF}">
+본 메일은 발신 전용 메일입니다.<br>
+도움이 필요하신가요? <u><b>고객센터(02-711-6880)</b></u>로 문의해주세요.
+</td></tr>
+<tr><td width="32"></td><td style="padding-bottom:10px;font-size:12px;color:#a0a0a0;line-height:18px;vertical-align:top;${FF}">
+주식회사 트립비토즈 &nbsp;|&nbsp; 대표이사 : 정지하 &nbsp;|&nbsp;사업자등록번호 : 778-86-00179<br>
+(06160) 서울시 강남구 테헤란로 415, L7 빌딩<br>
+Copyright (c) 2015. Tripbtoz, Inc. All Rights Reserved.
+</td></tr>
+<tr><td width="32"></td><td style="font-size:12px;color:#a0a0a0;line-height:22px;vertical-align:top;${FF}">
+<a href="https://www.tripbtoz.com/" target="_blank" style="color:#B3B3B3;">www.tripbtoz.com</a><br>
+모든 여행자가 만나는 세상, 트립비토즈
+</td></tr>
+<tr><td width="32"></td><td style="padding-top:12px;vertical-align:top;">
+<table cellpadding="0" cellspacing="0"><tbody><tr>
+<td style="padding-right:8px"><a href="https://www.instagram.com/tripbtoz" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_Instagram.png" width="32" height="32" border="0"></a></td>
+<td style="padding-right:8px"><a href="https://www.facebook.com/Tripbtoz" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_facebook.png" width="32" height="32" border="0"></a></td>
+<td style="padding-right:8px"><a href="https://www.youtube.com/c/%ED%8A%B8%EB%A6%BD%EB%B9%84%ED%86%A0%EC%A6%88" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_youtube.png" width="32" height="32" border="0"></a></td>
+<td style="padding-right:8px"><a href="https://blog.naver.com/tripbtoz" target="_blank"><img src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/img_blog.png" width="32" height="32" border="0"></a></td>
+</tr></tbody></table>
+</td></tr>
+</tbody></table>
+</td></tr>`;
+    }
   }
   if(b.type==='title') { const lines=(b.data.text||'').split('\n').join('<br>'); return `<tr><td style="padding:28px 32px 12px;font-size:${b.data.size||24}px;color:#181818;line-height:1.4;${FF}"><b>${lines}</b></td></tr>`; }
+  if(b.type==='subtitle') { const lines=(b.data.text||'').split('\n').join('<br>'); return `<tr><td style="padding:12px 32px 8px;font-size:${b.data.size||18}px;font-weight:700;color:#181818;line-height:1.4;${FF}"><b>${lines}</b></td></tr>`; }
   if(b.type==='text') { const lines=(b.data.text||'').split('\n').join('<br>'); return `<tr><td style="padding:8px 32px 20px;font-size:15px;color:#333;line-height:170%;${FF}">${lines}</td></tr>`; }
   if(b.type==='highlight') return `<tr><td style="padding:4px 32px 20px"><div style="background:#fff8e1;border-left:3px solid #f5a623;border-radius:0 6px 6px 0;padding:14px 18px"><div style="font-size:14px;font-weight:bold;color:#181818;margin-bottom:4px;${FF}">${b.data.label||''}</div>${b.data.sublabel?`<div style="font-size:13px;color:#666;${FF}">${b.data.sublabel}</div>`:''}</div></td></tr>`;
   if(b.type==='cta') { const s=b.data.style==='outline'?'border:2px solid #7B3CFF;color:#7B3CFF;background:#fff':'background:#7B3CFF;color:#fff;border:2px solid #7B3CFF'; return `<tr><td align="center" style="padding:16px 0 24px"><a href="${b.data.link||'#'}" style="display:inline-block;padding:13px 36px;border-radius:6px;font-size:15px;font-weight:bold;text-decoration:none;${s};${FF}">${b.data.text||'버튼'}</a></td></tr>`; }
@@ -990,25 +1027,19 @@ function addSelectedToCart() {
     const priceData = (window._hotelPrices || {})[hid];
     let priceNum = 0;
     let discountNum = 0;
-    let checkIn = '';
-    let checkOut = '';
     if(priceData && priceData.available) {
       priceNum    = priceData.discounted_price || 0;
       discountNum = priceData.discount_rate    || 0;
-      checkIn     = priceData.check_in  || '';
-      checkOut    = priceData.check_out || '';
     } else if(priceIdx !== -1 && row[priceIdx]) {
       priceNum = Math.round(parseFloat(String(row[priceIdx]))) || 0;
     }
-    if(!checkIn || !checkOut) {
-      const now = new Date();
-      const daysToMonday = (8 - now.getDay()) % 7 || 7;
-      const ci = new Date(now); ci.setDate(now.getDate() + daysToMonday);
-      const co = new Date(ci); co.setDate(ci.getDate() + 1);
-      const fmtD = d => d.toISOString().split('T')[0];
-      checkIn  = fmtD(ci);
-      checkOut = fmtD(co);
-    }
+    const now = new Date();
+    const daysToMonday = (8 - now.getDay()) % 7 || 7;
+    const ci = new Date(now); ci.setDate(now.getDate() + daysToMonday);
+    const co = new Date(ci); co.setDate(ci.getDate() + 1);
+    const fmtD = d => d.toISOString().split('T')[0];
+    const checkIn = fmtD(ci);
+    const checkOut = fmtD(co);
     const hotelName = nameIdx !== -1 ? String(row[nameIdx] || '') : '';
     cartHotels.push({
       name:     hotelName,
@@ -1310,7 +1341,6 @@ async function deleteSegment(id, name) {
 // ═══════════════════════════════════════════
 async function renderDashboard() {
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-
   const { data: pending } = await sb.from('email_schedules')
     .select('*').eq('status', 'pending').order('scheduled_at', { ascending: true });
 
@@ -1332,9 +1362,27 @@ async function renderDashboard() {
   document.getElementById('kpi-total-sent').textContent = totalSent.toLocaleString() + '명';
   document.getElementById('kpi-total-failed').textContent = totalFailed > 0 ? totalFailed.toLocaleString() + '명' : '0명';
 
-  renderDashSection('dash-pending-list', pending || [], 'pending');
-  renderDashSection('dash-sent-list', sentList, 'sent');
-  renderDashSection('dash-failed-list', failedList, 'failed');
+  // 발송 완료 캠페인 통계 배치 조회
+  const allSentIds = sentList.map(s => s.id);
+  let statsMap = {};
+  if(allSentIds.length > 0) {
+    const { data: events } = await sb.from('email_events')
+      .select('schedule_id, event_type, email_hash')
+      .in('schedule_id', allSentIds);
+    if(events) {
+      allSentIds.forEach(sid => {
+        const evs = events.filter(e => e.schedule_id === sid);
+        statsMap[sid] = {
+          opens:  new Set(evs.filter(e => e.event_type === 'open').map(e => e.email_hash)).size,
+          clicks: new Set(evs.filter(e => e.event_type === 'click').map(e => e.email_hash)).size,
+        };
+      });
+    }
+  }
+
+  renderDashSection('dash-pending-list', pending || [], 'pending', {});
+  renderDashSection('dash-sent-list', sentList, 'sent', statsMap);
+  renderDashSection('dash-failed-list', failedList, 'failed', {});
 }
 
 const SCHEDULE_TYPE_LABEL = { once: '1회성', daily: '매일', weekly: '매주', biweekly: '격주', monthly: '매월' };
@@ -1353,7 +1401,7 @@ function fmtScheduleTime(s) {
   return '-';
 }
 
-function renderDashSection(containerId, list, type) {
+function renderDashSection(containerId, list, type, statsMap = {}) {
   const el = document.getElementById(containerId);
   if(list.length === 0) {
     const emptyMsg = type === 'pending' ? '예약된 발송이 없어요' : type === 'failed' ? '최근 2주 실패 내역이 없어요' : '최근 2주 발송 내역이 없어요';
@@ -1369,13 +1417,29 @@ function renderDashSection(containerId, list, type) {
       ? `<button class="btn-danger btn-sm" onclick="cancelSchedule('${s.id}')">취소</button>
          <button class="btn-schedule btn-sm" onclick="markSent('${s.id}')">발송 완료 처리</button>`
       : '';
-    const sentStats = (type === 'sent' || type === 'failed')
+
+    const sentCount = s.sent_count || 0;
+    const stats = statsMap[s.id] || {};
+    const openRate  = sentCount > 0 && stats.opens  ? Math.round(stats.opens  / sentCount * 100) : null;
+    const clickRate = sentCount > 0 && stats.clicks ? Math.round(stats.clicks / sentCount * 100) : null;
+
+    const sentStats = type === 'sent'
       ? `<div class="dash-card-stats">
-           <span class="dash-stat-sent">✔ ${(s.sent_count||0).toLocaleString()}명 발송</span>
+           <span class="dash-stat-sent">✔ ${sentCount.toLocaleString()}명 발송</span>
+           ${stats.opens  != null ? `<span class="dash-stat-open">👁 ${stats.opens.toLocaleString()}명 열람${openRate != null ? ` (${openRate}%)` : ''}</span>` : ''}
+           ${stats.clicks != null ? `<span class="dash-stat-click">🖱 ${stats.clicks.toLocaleString()}명 클릭${clickRate != null ? ` (${clickRate}%)` : ''}</span>` : ''}
            ${s.failed_count > 0 ? `<span class="dash-stat-failed">✘ ${s.failed_count.toLocaleString()}명 실패</span>` : ''}
          </div>`
+      : type === 'failed'
+      ? `<div class="dash-card-stats"><span class="dash-stat-failed">✘ ${s.failed_count?.toLocaleString()||0}명 실패</span></div>`
       : '';
-    const clickAttr = (type === 'pending' || type === 'failed') ? `onclick="openScheduleDetail('${s.id}')" style="cursor:pointer"` : '';
+
+    const clickAttr = type === 'sent'
+      ? `onclick="openCampaignStats('${s.id}','${(s.subject||'').replace(/'/g,"\\'")}',${sentCount})" style="cursor:pointer"`
+      : type === 'pending' || type === 'failed'
+      ? `onclick="openScheduleDetail('${s.id}')" style="cursor:pointer"`
+      : '';
+
     return `<div class="dash-card" ${clickAttr}>
       <div class="dash-card-left">
         <div class="dash-card-left-row">
@@ -1392,6 +1456,55 @@ function renderDashSection(containerId, list, type) {
       </div>
     </div>`;
   }).join('');
+}
+
+async function openCampaignStats(scheduleId, subject, sentCount) {
+  const modal = document.getElementById('schedule-detail-modal');
+  const body  = document.getElementById('schedule-detail-body');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:#888">통계 불러오는 중...</div>';
+  modal.style.display = 'flex';
+
+  try {
+    const res  = await fetch(`http://localhost:3001/api/campaign-stats/${scheduleId}`);
+    const data = await res.json();
+    const { opens, clicks, totalClicks, urlStats } = data;
+    const openRate  = sentCount > 0 ? (opens  / sentCount * 100).toFixed(1) : 0;
+    const clickRate = sentCount > 0 ? (clicks / sentCount * 100).toFixed(1) : 0;
+
+    const urlRows = (urlStats || []).map(({ url, count }) => {
+      const label = url.includes('/hotels/') ? `🏨 ${decodeURIComponent(url.match(/query=([^&]+)/)?.[1] || url.split('/hotels/')[1]?.split('?')[0] || url)}` : url.length > 60 ? url.slice(0, 60) + '…' : url;
+      const pct = totalClicks > 0 ? Math.round(count / totalClicks * 100) : 0;
+      return `<tr>
+        <td style="padding:8px 12px;font-size:12px;color:#444;max-width:260px;word-break:break-all">${label}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:600;color:#7B3CFF">${count}</td>
+        <td style="padding:8px 12px;text-align:right;color:#888;font-size:12px">${pct}%</td>
+      </tr>`;
+    }).join('');
+
+    body.innerHTML = `
+      <div style="margin-bottom:16px">
+        <div style="font-size:14px;font-weight:600;color:#eee;margin-bottom:12px">${subject}</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div class="stat-chip"><div class="stat-chip-val">${sentCount.toLocaleString()}</div><div class="stat-chip-label">발송</div></div>
+          <div class="stat-chip open"><div class="stat-chip-val">${opens.toLocaleString()} <span style="font-size:12px;font-weight:400">(${openRate}%)</span></div><div class="stat-chip-label">👁 열람</div></div>
+          <div class="stat-chip click"><div class="stat-chip-val">${clicks.toLocaleString()} <span style="font-size:12px;font-weight:400">(${clickRate}%)</span></div><div class="stat-chip-label">🖱 클릭</div></div>
+        </div>
+      </div>
+      ${urlRows ? `
+      <div style="font-size:12px;color:#888;margin-bottom:8px">링크별 클릭</div>
+      <div style="overflow-y:auto;max-height:260px;border-radius:8px;border:1px solid #2a2a3a">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:#1a1a2e">
+            <th style="padding:8px 12px;text-align:left;font-size:11px;color:#888">링크</th>
+            <th style="padding:8px 12px;text-align:right;font-size:11px;color:#888">클릭</th>
+            <th style="padding:8px 12px;text-align:right;font-size:11px;color:#888">비율</th>
+          </tr></thead>
+          <tbody>${urlRows}</tbody>
+        </table>
+      </div>` : '<div style="color:#888;font-size:13px">아직 클릭 데이터가 없습니다.</div>'}`;
+  } catch(e) {
+    body.innerHTML = `<div style="color:#e24b4a">통계를 불러올 수 없습니다.</div>`;
+  }
 }
 
 async function openScheduleDetail(id) {

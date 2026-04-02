@@ -196,19 +196,18 @@ function getDateVars() {
   };
 }
 
+function getNextMondayDates() {
+  const now = new Date();
+  const daysToMonday = (8 - now.getDay()) % 7 || 7;
+  const ci = new Date(now); ci.setDate(now.getDate() + daysToMonday);
+  const co = new Date(ci); co.setDate(ci.getDate() + 1);
+  const fmt = d => d.toISOString().split('T')[0];
+  return { checkIn: fmt(ci), checkOut: fmt(co) };
+}
+
 function buildHotelUrl(h, utmCampaign) {
   const base = 'https://www.tripbtoz.com/hotels';
-  let checkIn  = h.check_in  || '';
-  let checkOut = h.check_out || '';
-  if (!checkIn || !checkOut) {
-    const now = new Date();
-    const daysToMonday = (8 - now.getDay()) % 7 || 7;
-    const ci = new Date(now); ci.setDate(now.getDate() + daysToMonday);
-    const co = new Date(ci); co.setDate(ci.getDate() + 1);
-    const fmtD = d => d.toISOString().split('T')[0];
-    checkIn  = fmtD(ci);
-    checkOut = fmtD(co);
-  }
+  const { checkIn, checkOut } = getNextMondayDates();
   const query = encodeURIComponent(h.name_kr || h.name || '');
   const utm = utmCampaign ? `&utm_source=email&utm_medium=newsletter&utm_campaign=${encodeURIComponent(utmCampaign)}` : '';
   return `${base}/${h.hotel_id}?check-in=${checkIn}&check-out=${checkOut}&rooms=1&room-0-adults=2&room-0-children=0&query=${query}&searchId=${h.hotel_id}&searchType=HOTEL${utm}`;
@@ -223,7 +222,7 @@ function renderHotelCardsHtml(hotels, utmCampaign) {
     let priceHtml;
     if (h.price_available) {
       const discountBadge = h.discount_rate > 0
-        ? `<span style="font-size:11px;color:#f43f5e;background:#fff0f3;padding:2px 7px;border-radius:10px;font-weight:600;">-${h.discount_rate}%</span>`
+        ? `<span style="font-size:11px;color:#7B3CFF;background:#f0ebff;padding:2px 7px;border-radius:10px;font-weight:600;">${h.discount_rate}% 할인</span>`
         : '';
       const strikethrough = h.discount_rate > 0 && h.regular_price
         ? `<p style="margin:2px 0 0;font-size:11px;color:#bbb;text-decoration:line-through;">${fmt(h.regular_price)} 원</p>`
@@ -279,8 +278,6 @@ async function fetchDynamicContent(contentQuery, contentLimit) {
       try {
         const res = await fetch(`http://localhost:3001/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) });
         const p = await res.json();
-        h.check_in  = p.check_in  || '';
-        h.check_out = p.check_out || '';
         if(p.available) {
           h.price_available  = true;
           h.discounted_price = p.discounted_price;
@@ -320,7 +317,6 @@ async function fetchDynamicContentWithUTM(contentQuery, contentLimit, utmCampaig
     star_rating: starIdx     >= 0 ? r[starIdx]     : '',
     db_min_price: minPriceIdx >= 0 ? (r[minPriceIdx] ? Number(r[minPriceIdx]) : null) : null,
     price_available: false,
-    check_in: '', check_out: '',
   }));
 
   if(hotelIdIdx >= 0) {
@@ -328,8 +324,6 @@ async function fetchDynamicContentWithUTM(contentQuery, contentLimit, utmCampaig
       try {
         const res = await fetch(`http://localhost:3001/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) });
         const p = await res.json();
-        h.check_in  = p.check_in  || '';
-        h.check_out = p.check_out || '';
         if(p.available) {
           h.price_available  = true;
           h.discounted_price = p.discounted_price;
@@ -395,14 +389,31 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, presetK
     const dynVars = await fetchDynamicContentWithUTM(contentQuery, contentLimit, utmCampaign || subject);
     console.log(`[send] 동적 변수: ${Object.keys(dynVars).join(', ')}`);
 
-    // 기본 HTML 렌더링 (동적 변수 치환)
+    // 기본 HTML 렌더링 (동적 변수 치환 + 트래킹)
+    const trackBase = process.env.SERVER_URL || 'http://localhost:3001';
     function renderHtml(baseHtml, email) {
       let html = baseHtml;
       for(const [k, v] of Object.entries(dynVars)) {
         html = html.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
       }
-      html = html.replace(/\{\{UNSUB_URL\}\}/g, getUnsubUrl(email));
-      return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f5f5f5;"><table cellpadding="0" cellspacing="0" width="100%" style="background:#f5f5f5;"><tr><td align="center" style="padding:20px 0;"><div style="width:600px;max-width:100%;margin:0 auto;background:#fff;">${html}</div></td></tr></table></body></html>`;
+      const unsubUrl = getUnsubUrl(email);
+      html = html.replace(/\{\{UNSUB_URL\}\}/g, unsubUrl)
+                 .replace(/#\{UNSUBSCRIBE_URL\}/g, unsubUrl)
+                 .replace(/\{\{UNSUBSCRIBE_URL\}\}/g, unsubUrl);
+
+      const eHash = Buffer.from(email).toString('base64url');
+
+      // 링크 트래킹 래핑 (unsubscribe, 트래킹 URL 제외)
+      if(scheduleId) {
+        html = html.replace(/href="(https?:\/\/[^"]+)"/g, (match, url) => {
+          if(url.includes('/track/') || url.includes('unsubscribe')) return match;
+          const clickUrl = `${trackBase}/track/click?sid=${scheduleId}&e=${eHash}&url=${encodeURIComponent(url)}`;
+          return `href="${clickUrl}"`;
+        });
+      }
+
+      const fullHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"><style>*{font-family:'Pretendard','Malgun Gothic','맑은 고딕',Apple SD Gothic Neo,sans-serif!important}</style></head><body style="margin:0;padding:0;background:#f5f5f5;font-family:'Pretendard','Malgun Gothic','맑은 고딕',Apple SD Gothic Neo,sans-serif;"><table cellpadding="0" cellspacing="0" width="100%" style="background:#f5f5f5;"><tr><td align="center" style="padding:20px 0;"><div style="width:600px;max-width:100%;margin:0 auto;background:#fff;">${html}</div></td></tr></table>${scheduleId ? `<img src="${trackBase}/track/open?sid=${scheduleId}&e=${eHash}" width="1" height="1" style="display:none" alt="">` : ''}</body></html>`;
+      return fullHtml;
     }
 
     // DRY RUN: SES 호출 없이 결과 시뮬레이션
@@ -580,6 +591,52 @@ app.post('/api/preview-content', async (req, res) => {
   } catch(e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ── 이메일 트래킹 ──
+const PIXEL_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+
+app.get('/track/open', async (req, res) => {
+  res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store,no-cache,must-revalidate' });
+  res.send(PIXEL_GIF);
+  const { sid, e } = req.query;
+  if(sid) {
+    try { await sb.from('email_events').insert({ schedule_id: sid, email_hash: e || null, event_type: 'open' }); } catch(_) {}
+  }
+});
+
+app.get('/track/click', async (req, res) => {
+  const { sid, e, url } = req.query;
+  const target = url ? decodeURIComponent(url) : 'https://www.tripbtoz.com';
+  res.redirect(302, target);
+  if(sid && url) {
+    try { await sb.from('email_events').insert({ schedule_id: sid, email_hash: e || null, event_type: 'click', url: target }); } catch(_) {}
+  }
+});
+
+// 캠페인 통계 조회
+app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
+  const { scheduleId } = req.params;
+  const { data, error } = await sb.from('email_events')
+    .select('event_type, url, email_hash')
+    .eq('schedule_id', scheduleId);
+  if(error) return res.status(400).json({ error: error.message });
+
+  const opens  = new Set(data.filter(e => e.event_type === 'open').map(e => e.email_hash)).size;
+  const clicks = new Set(data.filter(e => e.event_type === 'click').map(e => e.email_hash)).size;
+  const totalClicks = data.filter(e => e.event_type === 'click').length;
+
+  // URL별 클릭 집계
+  const urlMap = {};
+  data.filter(e => e.event_type === 'click').forEach(e => {
+    const key = e.url || '-';
+    urlMap[key] = (urlMap[key] || 0) + 1;
+  });
+  const urlStats = Object.entries(urlMap)
+    .sort((a, b) => b[1] - a[1])
+    .map(([url, count]) => ({ url, count }));
+
+  res.json({ opens, clicks, totalClicks, urlStats });
 });
 
 // 발송 진행 상황 조회

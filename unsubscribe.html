@@ -80,6 +80,31 @@ async function verifyToken(email, token) {
   return expected === token;
 }
 
+function showConfirm(email, onConfirm) {
+  document.getElementById('card').innerHTML = `
+    <div class="logo">
+      <svg width="120" height="28" viewBox="0 0 120 28" fill="none">
+        <rect width="28" height="28" rx="6" fill="#7B3CFF"/>
+        <path d="M7 14h14M14 7v14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="36" y="20" font-family="'Malgun Gothic',Helvetica,sans-serif" font-size="14" font-weight="700" fill="#181818">트립비토즈</text>
+      </svg>
+    </div>
+    <div class="icon">📧</div>
+    <h1>수신 거부 확인</h1>
+    <div class="email-chip">${email}</div>
+    <p>위 이메일 주소로 발송되는<br>트립비토즈 마케팅 메일 수신을 거부하시겠습니까?</p>
+    <div style="margin-top:24px">
+      <button class="btn" style="background:#e53e3e" id="confirm-btn">수신 거부</button>
+      <a href="https://www.tripbtoz.com/" class="btn secondary">취소</a>
+    </div>
+  `;
+  document.getElementById('confirm-btn').onclick = async () => {
+    const btn = document.getElementById('confirm-btn');
+    btn.disabled = true; btn.textContent = '처리 중...';
+    await onConfirm();
+  };
+}
+
 function showSuccess(email) {
   document.getElementById('card').innerHTML = `
     <div class="logo">
@@ -154,20 +179,19 @@ async function init() {
     return;
   }
 
-  // 수신거부 등록
-  const { error } = await sb.from('unsubscribers').insert({
-    email,
-    unsubscribed_at: new Date().toISOString(),
-    source_template: params.get('tpl') || null
+  // 확인 페이지 표시
+  showConfirm(email, async () => {
+    const { error } = await sb.from('unsubscribers').insert({
+      email,
+      unsubscribed_at: new Date().toISOString(),
+      source_template: params.get('tpl') || null,
+    });
+    if (error) {
+      showError('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      return;
+    }
+    showSuccess(email);
   });
-
-  if(error) {
-    showError('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
-    console.error(error);
-    return;
-  }
-
-  showSuccess(email);
 }
 
 init();
