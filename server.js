@@ -646,6 +646,68 @@ app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
   res.json({ opens, clicks, totalClicks, urlStats });
 });
 
+// AI 이메일 생성
+app.post('/api/ai-generate', async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if(!apiKey) return res.status(400).json({ error: 'ANTHROPIC_API_KEY가 설정되지 않았습니다' });
+
+  const { prompt } = req.body;
+  if(!prompt) return res.status(400).json({ error: 'prompt 필수' });
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2048,
+        messages: [{
+          role: 'user',
+          content: `트립비토즈 호텔 예약 서비스의 마케팅 이메일을 생성해주세요.
+
+사용자 요청: ${prompt}
+
+다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):
+{
+  "subject": "이메일 제목",
+  "blocks": [
+    { "type": "title", "data": { "text": "..." } },
+    { "type": "text", "data": { "text": "..." } },
+    { "type": "cta", "data": { "text": "버튼 텍스트", "url": "https://www.tripbtoz.com" } },
+    { "type": "footer", "data": { "footerType": "marketing" } }
+  ]
+}
+
+사용 가능한 블록 타입: title, subtitle, text, highlight, cta, divider, notice
+- title: { text }
+- subtitle: { text, size }
+- text: { text }
+- highlight: { text }
+- cta: { text, url }
+- divider: {}
+- notice: { text }
+- footer: { footerType: "marketing" | "info" }
+
+로고 블록과 푸터 블록은 항상 포함하지 마세요. 본문 내용 블록만 생성하세요.`
+        }],
+      }),
+    });
+
+    const aiData = await response.json();
+    const content = aiData.content?.[0]?.text;
+    if(!content) return res.status(500).json({ error: 'AI 응답 없음' });
+
+    const parsed = JSON.parse(content.replace(/```json\n?|\n?```/g, '').trim());
+    res.json(parsed);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 발송 진행 상황 조회
 app.get('/api/send-job/:jobId', (req, res) => {
   const job = sendJobs[req.params.jobId];

@@ -100,6 +100,16 @@
 <!-- ══ EDITOR VIEW ══ -->
 <div id="view-editor" class="view">
   <div class="left">
+    <div class="ai-panel">
+      <div class="ai-panel-header" onclick="toggleAiPanel()">
+        <span>✨ AI 이메일 생성</span>
+        <span id="ai-panel-arrow">▼</span>
+      </div>
+      <div class="ai-panel-body" id="ai-panel-body">
+        <textarea id="ai-prompt" placeholder="예: 제주도 여름 특가 호텔 프로모션 이메일, 할인 강조하고 CTA 버튼 포함해줘" rows="3"></textarea>
+        <button class="ai-generate-btn" id="ai-generate-btn" onclick="aiGenerate()">✨ 생성</button>
+      </div>
+    </div>
     <div class="left-header">
       <h2>블록 에디터</h2>
       <p>블록 추가 후 순서를 드래그로 조정하세요</p>

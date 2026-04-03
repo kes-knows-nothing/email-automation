@@ -2,7 +2,7 @@
 // API BASE URL
 // ═══════════════════════════════════════════
 const API_BASE = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
-  ? ''
+  ? 'http://localhost:3001'
   : 'https://email-automation-production-7cba.up.railway.app';
 
 // ═══════════════════════════════════════════
@@ -2274,4 +2274,49 @@ async function autoSaveSchedule() {
   if(error) { showToast('저장 실패: ' + error.message); return; }
 
   showToast('발송 예약이 저장되었어요');
+}
+
+// ═══════════════════════════════════════════
+// AI 이메일 생성
+// ═══════════════════════════════════════════
+function toggleAiPanel() {
+  const body = document.getElementById('ai-panel-body');
+  const arrow = document.getElementById('ai-panel-arrow');
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  arrow.textContent = isOpen ? '▼' : '▲';
+}
+
+async function aiGenerate() {
+  const prompt = document.getElementById('ai-prompt').value.trim();
+  if(!prompt) { showToast('프롬프트를 입력해주세요'); return; }
+
+  const btn = document.getElementById('ai-generate-btn');
+  btn.disabled = true;
+  btn.textContent = '생성 중...';
+
+  try {
+    const res = await fetch(API_BASE + '/api/ai-generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const data = await res.json();
+    if(data.error) { showToast('AI 오류: ' + data.error); return; }
+
+    if(data.blocks && Array.isArray(data.blocks)) {
+      blocks = data.blocks;
+      render();
+      rp();
+      showToast('AI 생성 완료!');
+    }
+    if(data.subject) {
+      document.getElementById('tpl-name-input').value = data.subject;
+    }
+  } catch(e) {
+    showToast('서버 연결 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ 생성';
+  }
 }
