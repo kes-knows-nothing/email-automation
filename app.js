@@ -51,6 +51,7 @@ function newTemplate() {
     { id: nextId++, type: 'logo',   open: false, data: {} },
     { id: nextId++, type: 'title',  open: false, data: { text: '이메일 제목을 입력하세요', size: '24' } },
     { id: nextId++, type: 'text',   open: false, data: { text: '본문 내용을 입력하세요.' } },
+    { id: nextId++, type: 'hotels', open: false, data: { hotels: [] } },
     { id: nextId++, type: 'notice', open: false, data: { n1: '안내 문구 1', n2: '안내 문구 2' } },
     { id: nextId++, type: 'banner', open: false, data: {} },
     { id: nextId++, type: 'footer', open: false, data: {} },
@@ -190,6 +191,12 @@ function toggleBlock(idx) {
   blocks.forEach(b => b.open = false);
   blocks[idx].open = !wasOpen;
   render();
+  if(blocks[idx].open && blocks[idx].type === 'hotels') {
+    requestAnimationFrame(() => {
+      const panel = document.querySelector(`[data-id="${blocks[idx].id}"] .smart-pick-panel`);
+      if(panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
 }
 
 function getSummary(b) {

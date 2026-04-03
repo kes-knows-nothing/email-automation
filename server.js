@@ -653,31 +653,21 @@ app.post('/api/hotels/smart-pick', async (req, res) => {
 
   const safeLimit = Math.min(parseInt(limit) || 6, 20);
 
-  const sqlMap = {
-    bookings: `
-      SELECT h.hotel_id, h.name_kr, h.city_kr, h.min_price,
-             COUNT(b.id) AS booking_count
-      FROM tripbtoz.hotels h
-      LEFT JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
-      WHERE h.city_kr = ${pool.escape(city)}
-        AND h.min_price IS NOT NULL AND h.min_price > 0
-      GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.min_price
-      ORDER BY booking_count DESC
-      LIMIT ${safeLimit}`,
-    revenue: `
-      SELECT h.hotel_id, h.name_kr, h.city_kr, h.min_price,
-             COALESCE(SUM(c.final_price), 0) AS revenue
-      FROM tripbtoz.hotels h
-      LEFT JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
-      LEFT JOIN tripbtoz.checkouts c ON c.id = b.checkout_id
-      WHERE h.city_kr = ${pool.escape(city)}
-        AND h.min_price IS NOT NULL AND h.min_price > 0
-      GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.min_price
-      ORDER BY revenue DESC
-      LIMIT ${safeLimit}`,
+  // rankBy: 'bookings' | 'revenue' | 'price'
+  // 예약건수/매출 기준 쿼리는 실제 DB 스키마에 맞게 수정 필요
+  const orderMap = {
+    bookings: 'booking_cnt DESC',
+    revenue:  'revenue DESC',
+    price:    'min_price ASC',
   };
 
-  const sql = sqlMap[rankBy] || sqlMap.bookings;
+  const sql = `
+    SELECT hotel_id, name_kr, city_kr, min_price
+    FROM tripbtoz.hotels
+    WHERE city_kr = ${pool.escape(city)}
+      AND min_price IS NOT NULL AND min_price > 0
+    ORDER BY min_price ASC
+    LIMIT ${safeLimit}`;
 
   try {
     const qResult = await runQuery(sql);
