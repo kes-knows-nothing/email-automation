@@ -94,6 +94,16 @@
     </div>
     <button class="btn-primary" onclick="newTemplate()">+ 새 템플릿 만들기</button>
   </div>
+  <div class="list-ai-area">
+    <div class="list-ai-label">✨ AI 템플릿 생성</div>
+    <div class="list-ai-row">
+      <textarea id="list-ai-prompt" class="list-ai-textarea" placeholder="예: 5월 국내 여행 추천 메일, 강조하고 싶은 내용 등" rows="2"></textarea>
+      <div class="list-ai-btns">
+        <button class="list-ai-btn-preset" id="list-season-btn" onclick="generateSeasonPromotion()">🗓 시즌 프로모션 자동 생성</button>
+        <button class="list-ai-btn" id="list-ai-btn" onclick="generateFromListPrompt()">✨ 생성</button>
+      </div>
+    </div>
+  </div>
   <div class="tpl-grid" id="tpl-grid"></div>
 </div>
 

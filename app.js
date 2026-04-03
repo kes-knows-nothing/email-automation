@@ -2339,6 +2339,58 @@ async function smartPickHotels(idx) {
 }
 
 // ═══════════════════════════════════════════
+// 템플릿 목록 AI 생성
+// ═══════════════════════════════════════════
+async function generateFromListPrompt() {
+  const prompt = document.getElementById('list-ai-prompt').value.trim();
+  if(!prompt) { showToast('프롬프트를 입력해주세요'); return; }
+  const btn = document.getElementById('list-ai-btn');
+  btn.disabled = true; btn.textContent = '생성 중...';
+  try {
+    await _aiGenerateAndOpen(prompt);
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ 생성';
+  }
+}
+
+async function generateSeasonPromotion() {
+  const btn = document.getElementById('list-season-btn');
+  btn.disabled = true; btn.textContent = '생성 중...';
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const monthName = nextMonth.toLocaleString('ko-KR', { month: 'long' });
+  const prompt = `${monthName} 시즌 여행 호텔 추천 이메일. 국내 여행지 2곳(각 4개 호텔), 해외 여행지 2곳(각 4개 호텔) 포함. 시즌에 어울리는 여행지 선정.`;
+  try {
+    await _aiGenerateAndOpen(prompt);
+  } finally {
+    btn.disabled = false; btn.textContent = '🗓 시즌 프로모션 자동 생성';
+  }
+}
+
+async function _aiGenerateAndOpen(prompt) {
+  try {
+    const res = await fetch(API_BASE + '/api/ai-generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const data = await res.json();
+    if(data.error) { showToast('AI 오류: ' + data.error); return; }
+    if(!data.blocks?.length) { showToast('생성 결과가 없습니다'); return; }
+
+    currentTplId = null;
+    nextId = 1;
+    blocks = data.blocks.map(b => ({ ...b, id: nextId++, open: false }));
+    document.getElementById('tpl-name-input').value = data.subject || '';
+    showView('editor');
+    render(); rp();
+    showToast('AI 템플릿 생성 완료! 에디터에서 수정하세요');
+  } catch(e) {
+    showToast('서버 연결 실패: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════
 // AI 이메일 생성
 // ═══════════════════════════════════════════
 function toggleAiPanel() {
