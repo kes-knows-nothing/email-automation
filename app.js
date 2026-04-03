@@ -217,6 +217,31 @@ function esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+const TEMPLATE_VARS = [
+  { key: 'guest_name',  label: '예약자명' },
+  { key: 'hotel_name',  label: '호텔명' },
+  { key: 'check_in',   label: '체크인' },
+  { key: 'check_out',  label: '체크아웃' },
+  { key: 'booking_id', label: '예약번호' },
+  { key: 'room_name',  label: '객실명' },
+];
+
+function varChips(elId) {
+  return `<div class="var-chips">${TEMPLATE_VARS.map(v =>
+    `<span class="var-chip" onclick="insertVar('${elId}','{{${v.key}}}')" title="${v.key}">{{${v.label}}}</span>`
+  ).join('')}</div>`;
+}
+
+function insertVar(elId, text) {
+  const el = document.getElementById(elId);
+  if(!el) return;
+  const s = el.selectionStart, e = el.selectionEnd;
+  el.value = el.value.slice(0, s) + text + el.value.slice(e);
+  el.selectionStart = el.selectionEnd = s + text.length;
+  el.dispatchEvent(new Event('input'));
+  el.focus();
+}
+
 function renderEditor(b, idx) {
   const t = b.type;
   if(['logo','divider','banner'].includes(t)) return '<div class="no-edit-note">편집 항목 없음 — 고정 블록</div>';
@@ -234,22 +259,27 @@ function renderEditor(b, idx) {
     </div>`;
   if(t==='title') return `
     <div class="fl">제목 텍스트</div>
-    <textarea class="fi" rows="3" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
+    <textarea id="vf-${b.id}-text" class="fi" rows="3" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
+    ${varChips(`vf-${b.id}-text`)}
     <div class="fl">폰트 크기 (px)</div>
     <input class="fi" type="number" value="${b.data.size||24}" min="14" max="40" oninput="blocks[${idx}].data.size=this.value;rp()">`;
   if(t==='subtitle') return `
     <div class="fl">서브타이틀 텍스트</div>
-    <textarea class="fi" rows="3" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
+    <textarea id="vf-${b.id}-text" class="fi" rows="3" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
+    ${varChips(`vf-${b.id}-text`)}
     <div class="fl">폰트 크기 (px)</div>
     <input class="fi" type="number" value="${b.data.size||18}" min="12" max="32" oninput="blocks[${idx}].data.size=this.value;rp()">`;
   if(t==='text') return `
     <div class="fl">본문</div>
-    <textarea class="fi" rows="5" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>`;
+    <textarea id="vf-${b.id}-text" class="fi" rows="5" oninput="blocks[${idx}].data.text=this.value;rp()">${esc(b.data.text||'')}</textarea>
+    ${varChips(`vf-${b.id}-text`)}`;
   if(t==='highlight') return `
     <div class="fl">메인 문구</div>
-    <input class="fi" value="${esc(b.data.label||'')}" oninput="blocks[${idx}].data.label=this.value;rp()">
+    <input id="vf-${b.id}-label" class="fi" value="${esc(b.data.label||'')}" oninput="blocks[${idx}].data.label=this.value;rp()">
+    ${varChips(`vf-${b.id}-label`)}
     <div class="fl">서브 문구</div>
-    <input class="fi" value="${esc(b.data.sublabel||'')}" oninput="blocks[${idx}].data.sublabel=this.value;rp()">`;
+    <input id="vf-${b.id}-sublabel" class="fi" value="${esc(b.data.sublabel||'')}" oninput="blocks[${idx}].data.sublabel=this.value;rp()">
+    ${varChips(`vf-${b.id}-sublabel`)}`;
   if(t==='cta') return `
     <div class="fl">버튼 텍스트</div>
     <input class="fi" value="${esc(b.data.text||'')}" oninput="blocks[${idx}].data.text=this.value;rp()">
