@@ -86,11 +86,11 @@ body {
 .list-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .list-ai-area { background: #1a1040; border: 1px solid #3a2a70; border-radius: 12px; padding: 16px 20px; margin-bottom: 28px; }
 .list-ai-label { font-size: 12px; font-weight: 700; color: #c4a8ff; margin-bottom: 10px; letter-spacing: 0.3px; }
-.list-ai-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.list-ai-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 8px; }
 .list-ai-textarea { flex: 1; background: #0f0a2a; border: 1px solid #4a2f9a; border-radius: 8px; color: #e0d0ff; font-size: 13px; padding: 9px 12px; resize: none; font-family: inherit; }
 .list-ai-textarea:focus { outline: none; border-color: #7B3CFF; }
 .list-ai-preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.list-ai-btn { padding: 8px 16px; background: #7B3CFF; color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.list-ai-btn { padding: 8px 16px; background: #7B3CFF; color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; align-self: stretch; }
 .list-ai-btn:hover { background: #6930e0; }
 .list-ai-btn:disabled { background: #3a2a60; color: #888; cursor: not-allowed; }
 .list-ai-btn-preset { padding: 8px 16px; background: transparent; color: #c4a8ff; border: 1px solid #4a2f9a; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
