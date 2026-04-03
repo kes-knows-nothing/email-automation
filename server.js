@@ -646,6 +646,92 @@ app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
   res.json({ opens, clicks, totalClicks, urlStats });
 });
 
+// 호텔 스마트 조회
+app.post('/api/hotels/smart-pick', async (req, res) => {
+  const { city, rankBy = 'bookings', limit = 6 } = req.body;
+  if(!city) return res.status(400).json({ error: 'city 필수' });
+
+  const safeLimit = Math.min(parseInt(limit) || 6, 20);
+
+  const sqlMap = {
+    bookings: `
+      SELECT h.hotel_id, h.name_kr, h.city_kr, h.min_price,
+             COUNT(b.id) AS booking_count
+      FROM tripbtoz.hotels h
+      LEFT JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
+      WHERE h.city_kr = ${pool.escape(city)}
+        AND h.min_price IS NOT NULL AND h.min_price > 0
+      GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.min_price
+      ORDER BY booking_count DESC
+      LIMIT ${safeLimit}`,
+    revenue: `
+      SELECT h.hotel_id, h.name_kr, h.city_kr, h.min_price,
+             COALESCE(SUM(c.final_price), 0) AS revenue
+      FROM tripbtoz.hotels h
+      LEFT JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
+      LEFT JOIN tripbtoz.checkouts c ON c.id = b.checkout_id
+      WHERE h.city_kr = ${pool.escape(city)}
+        AND h.min_price IS NOT NULL AND h.min_price > 0
+      GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.min_price
+      ORDER BY revenue DESC
+      LIMIT ${safeLimit}`,
+  };
+
+  const sql = sqlMap[rankBy] || sqlMap.bookings;
+
+  try {
+    const qResult = await runQuery(sql);
+    if(qResult.type !== 'select' || !qResult.rows.length) return res.json({ hotels: [] });
+
+    const cols = qResult.columns.map(c => c.toLowerCase());
+    const hotelIdIdx   = cols.indexOf('hotel_id');
+    const nameIdx      = cols.findIndex(c => ['name_kr','name_ko','name'].includes(c));
+    const cityIdx      = cols.indexOf('city_kr');
+    const minPriceIdx  = cols.indexOf('min_price');
+
+    const hotels = qResult.rows.slice(0, safeLimit).map(r => ({
+      hotel_id:     hotelIdIdx  >= 0 ? r[hotelIdIdx]  : null,
+      name_kr:      nameIdx     >= 0 ? r[nameIdx]     : '',
+      city_kr:      cityIdx     >= 0 ? r[cityIdx]     : '',
+      db_min_price: minPriceIdx >= 0 ? (r[minPriceIdx] ? Math.round(parseFloat(String(r[minPriceIdx]))) : null) : null,
+      price_available: false,
+    }));
+
+    // 가격 API 병렬 조회
+    const serverBase = process.env.SERVER_URL || 'http://localhost:3001';
+    await Promise.all(hotels.map(async h => {
+      if(!h.hotel_id) return;
+      try {
+        const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(6000) }).then(r => r.json());
+        if(p.available) {
+          h.price_available = true;
+          h.discounted_price = p.discounted_price;
+          h.regular_price    = p.regular_price;
+          h.discount_rate    = p.discount_rate;
+        }
+      } catch(_) {}
+    }));
+
+    const { checkIn, checkOut } = getNextMondayDates();
+    const result = hotels
+      .filter(h => h.price_available || h.db_min_price)
+      .map(h => ({
+        name:     h.name_kr,
+        area:     h.city_kr,
+        price:    h.discounted_price || h.db_min_price || '',
+        discount: h.discount_rate    || '',
+        img:      '',
+        link:     h.hotel_id
+          ? `https://www.tripbtoz.com/hotels/${h.hotel_id}?check-in=${checkIn}&check-out=${checkOut}&rooms=1&room-0-adults=2&room-0-children=0&searchId=${h.hotel_id}&searchType=HOTEL`
+          : '',
+      }));
+
+    res.json({ hotels: result });
+  } catch(e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // AI 이메일 생성
 app.post('/api/ai-generate', async (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;

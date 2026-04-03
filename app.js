@@ -262,8 +262,27 @@ function renderEditor(b, idx) {
     const hs = b.data.hotels||[];
     const cartBtn = cartHotels.length > 0
       ? `<button class="btn-load-cart" onclick="loadCartToBlock(${idx})">🏨 담아둔 호텔 불러오기 (${cartHotels.length}개)</button>`
-      : `<div class="cart-empty-hint">SQL 탭에서 hotel_id 포함 쿼리 실행 후 호텔을 담아오면 여기서 불러올 수 있어요</div>`;
-    return `${cartBtn}${hs.map((h,hi)=>`
+      : '';
+    return `
+    <div class="smart-pick-panel">
+      <div class="smart-pick-title">🔍 자동 조회</div>
+      <div class="smart-pick-row">
+        <input class="fi smart-pick-city" id="smart-city-${idx}" placeholder="도시 입력 (예: 속초시)" autocomplete="off">
+      </div>
+      <div class="smart-pick-row" style="display:flex;gap:6px">
+        <select class="fi" id="smart-rank-${idx}" style="flex:1">
+          <option value="bookings">예약 건수 순</option>
+          <option value="revenue">매출 순</option>
+        </select>
+        <select class="fi" id="smart-limit-${idx}" style="width:72px">
+          <option value="4">4개</option>
+          <option value="6" selected>6개</option>
+          <option value="8">8개</option>
+        </select>
+      </div>
+      <button class="ai-generate-btn" id="smart-btn-${idx}" onclick="smartPickHotels(${idx})" style="margin-top:6px">🔍 조회해서 채우기</button>
+    </div>
+    ${cartBtn}${hs.map((h,hi)=>`
       <div class="hotel-entry">
         <div class="hotel-entry-head"><span class="hotel-entry-label">카드 ${hi+1}</span>
           <button class="ba del" onclick="blocks[${idx}].data.hotels.splice(${hi},1);render();rp()">✕</button></div>
@@ -2274,6 +2293,42 @@ async function autoSaveSchedule() {
   if(error) { showToast('저장 실패: ' + error.message); return; }
 
   showToast('발송 예약이 저장되었어요');
+}
+
+// ═══════════════════════════════════════════
+// 호텔 스마트 조회
+// ═══════════════════════════════════════════
+async function smartPickHotels(idx) {
+  const city  = document.getElementById(`smart-city-${idx}`)?.value.trim();
+  const rankBy = document.getElementById(`smart-rank-${idx}`)?.value;
+  const limit  = document.getElementById(`smart-limit-${idx}`)?.value;
+
+  if(!city) { showToast('도시를 입력해주세요'); return; }
+
+  const btn = document.getElementById(`smart-btn-${idx}`);
+  btn.disabled = true;
+  btn.textContent = '조회 중...';
+
+  try {
+    const res = await fetch(API_BASE + '/api/hotels/smart-pick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ city, rankBy, limit: parseInt(limit) }),
+    });
+    const data = await res.json();
+    if(data.error) { showToast('조회 실패: ' + data.error); return; }
+    if(!data.hotels?.length) { showToast('결과가 없습니다. 도시명을 확인해주세요'); return; }
+
+    blocks[idx].data.hotels = data.hotels;
+    render();
+    rp();
+    showToast(`${data.hotels.length}개 호텔 자동 조회 완료`);
+  } catch(e) {
+    showToast('서버 연결 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 조회해서 채우기';
+  }
 }
 
 // ═══════════════════════════════════════════
