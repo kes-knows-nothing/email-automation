@@ -275,8 +275,8 @@ function renderEditor(b, idx) {
           <option value="revenue">매출 순</option>
         </select>
         <select class="fi" id="smart-limit-${idx}" style="width:72px">
-          <option value="4">4개</option>
-          <option value="6" selected>6개</option>
+          <option value="4" selected>4개</option>
+          <option value="6">6개</option>
           <option value="8">8개</option>
         </select>
       </div>
