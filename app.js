@@ -30,14 +30,14 @@ function showView(name) {
   document.getElementById('topbar-logo').style.display = isEditor ? 'none' : 'flex';
   document.getElementById('topbar-back-btn').style.display = isEditor ? 'inline-flex' : 'none';
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  const navMap = { list: 'nav-template', dashboard: 'nav-dashboard', segment: 'nav-segment', sql: 'nav-sql', automation: 'nav-automation' };
+  const navMap = { list: 'nav-template', dashboard: 'nav-dashboard', segment: 'nav-segment', sql: 'nav-sql', trigger: 'nav-trigger' };
   if(navMap[name]) document.getElementById(navMap[name]).classList.add('active');
   currentView = name;
   if(name === 'list') renderTemplateList();
   if(name === 'dashboard') renderDashboard();
   if(name === 'segment') renderSegmentList();
   if(name === 'sql') initSQLView();
-  if(name === 'automation') initAutomationPage();
+  if(name === 'trigger') initTriggerPage();
 }
 
 function goTab(tab) { showView(tab); }
@@ -76,10 +76,24 @@ async function editTemplate(id) {
 // LIST VIEW
 // ═══════════════════════════════════════════
 async function renderTemplateList() {
-  const { data: list, error } = await sb.from('templates').select('*').order('updated_at', { ascending: false });
+  const [{ data: list, error }, { data: mappings }] = await Promise.all([
+    sb.from('templates').select('id, name, updated_at').order('updated_at', { ascending: false }),
+    sb.from('trigger_mappings').select('template_id, event_name, description, is_active'),
+  ]);
   if(error) { console.error(error); return; }
+
+  // template_id → mapping 맵
+  const triggerMap = {};
+  for(const m of (mappings || [])) {
+    if(m.template_id) triggerMap[m.template_id] = m;
+  }
+
+  const triggered = list.filter(t => triggerMap[t.id]);
+  const regular   = list.filter(t => !triggerMap[t.id]);
+
   document.getElementById('tpl-count').textContent = `총 ${list.length}개`;
   const grid = document.getElementById('tpl-grid');
+
   if(list.length === 0) {
     grid.innerHTML = `<div class="empty-state">
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><rect x="8" y="6" width="32" height="36" rx="4" stroke="#ddd" stroke-width="2"/><path d="M16 16h16M16 22h16M16 28h10" stroke="#ddd" stroke-width="2" stroke-linecap="round"/></svg>
@@ -88,31 +102,40 @@ async function renderTemplateList() {
     </div>`;
     return;
   }
-  grid.innerHTML = list.map(t => {
-    const scale = (260 / 600).toFixed(4);
-    const thumb = t.html
-      ? `<div class="tpl-thumb-inner" style="transform:scale(${scale})">${t.html}</div>`
-      : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ddd;font-size:12px">미리보기 없음</div>`;
+
+  function tplRow(t, mapping) {
     const updated = t.updated_at
-      ? new Date(t.updated_at).toLocaleDateString('ko-KR',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
+      ? new Date(t.updated_at).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
       : '';
-    return `<div class="tpl-card">
-      <div class="tpl-thumb" onclick="editTemplate('${t.id}')">
-        ${thumb}
-        <div class="tpl-thumb-overlay"><span>편집하기</span></div>
+    const triggerBadge = mapping
+      ? `<span class="tpl-trigger-badge ${mapping.is_active ? '' : 'inactive'}">${mapping.description || mapping.event_name}</span>`
+      : '';
+    return `<div class="tpl-row">
+      <div class="tpl-row-left">
+        <div class="tpl-row-name" onclick="editTemplate('${t.id}')">${t.name || '제목 없는 템플릿'}</div>
+        <div class="tpl-row-meta">${updated}${triggerBadge}</div>
       </div>
-      <div class="tpl-info">
-        <div class="tpl-name">${t.name || '제목 없는 템플릿'}</div>
-        <div class="tpl-meta">수정: ${updated}</div>
-      </div>
-      <div class="tpl-actions">
-        <button class="btn-secondary" onclick="editTemplate('${t.id}')">✏️ 편집</button>
+      <div class="tpl-row-actions">
+        <button class="btn-secondary" onclick="editTemplate('${t.id}')">편집</button>
         <button class="btn-secondary" onclick="duplicateTemplate('${t.id}')">복사</button>
         <button class="btn-schedule" onclick="openScheduleModal('${t.id}','${(t.name||'제목 없는 템플릿').replace(/'/g,"\\'")}')">📅 발송 예약</button>
         <button class="btn-danger" onclick="deleteTemplate('${t.id}')">삭제</button>
       </div>
     </div>`;
-  }).join('');
+  }
+
+  let html = '';
+  html += `<div class="tpl-two-col">
+    <div class="tpl-col">
+      <div class="tpl-section-label">🔗 트리거 연결됨 (${triggered.length})</div>
+      ${triggered.length ? triggered.map(t => tplRow(t, triggerMap[t.id])).join('') : '<div style="font-size:13px;color:var(--text-faint);padding:16px 0">없음</div>'}
+    </div>
+    <div class="tpl-col">
+      <div class="tpl-section-label">📄 일반 템플릿 (${regular.length})</div>
+      ${regular.length ? regular.map(t => tplRow(t, null)).join('') : '<div style="font-size:13px;color:var(--text-faint);padding:16px 0">없음</div>'}
+    </div>
+  </div>`;
+  grid.innerHTML = html;
 }
 
 async function duplicateTemplate(id) {
@@ -133,7 +156,19 @@ async function duplicateTemplate(id) {
 
 async function deleteTemplate(id) {
   const { data: tpl } = await sb.from('templates').select('name').eq('id', id).single();
-  if(!confirm(`"${tpl?.name||'이 템플릿'}"을 삭제할까요?`)) return;
+  const tplName = tpl?.name || '이 템플릿';
+
+  const { data: mappings } = await sb.from('trigger_mappings').select('id, event_name, description').eq('template_id', id);
+  if(mappings && mappings.length > 0) {
+    const eventLabels = mappings.map(m => m.description || m.event_name).join(', ');
+    const ok = confirm(`"${tplName}"은 트리거 "${eventLabels}"에 연결되어 있어요.\n\n트리거 연결을 해제하고 삭제하면 해당 트리거는 더 이상 작동하지 않아요.\n\n계속 삭제하시겠어요?`);
+    if(!ok) return;
+    // 트리거 매핑에서 template_id 해제
+    await sb.from('trigger_mappings').update({ template_id: null }).in('id', mappings.map(m => m.id));
+  } else {
+    if(!confirm(`"${tplName}"을 삭제할까요?`)) return;
+  }
+
   const { error } = await sb.from('templates').delete().eq('id', id);
   if(error) { showToast('삭제 실패'); console.error(error); return; }
   renderTemplateList();
@@ -244,7 +279,19 @@ function insertVar(elId, text) {
 
 function renderEditor(b, idx) {
   const t = b.type;
-  if(['logo','divider','banner'].includes(t)) return '<div class="no-edit-note">편집 항목 없음 — 고정 블록</div>';
+  if(['logo','divider'].includes(t)) return '<div class="no-edit-note">편집 항목 없음 — 고정 블록</div>';
+  if(t==='banner') return `
+    <div class="fl">배너 유형</div>
+    <div class="fv" style="display:flex;gap:8px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="banner-type-${b.id}" value="default" ${(b.data.bannerType||'default')==='default'?'checked':''} onchange="blocks[${idx}].data.bannerType=this.value;render();rp()">
+        <span style="font-size:13px">기본 배너</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="banner-type-${b.id}" value="agenthub" ${b.data.bannerType==='agenthub'?'checked':''} onchange="blocks[${idx}].data.bannerType=this.value;render();rp()">
+        <span style="font-size:13px">AgentHub 배너</span>
+      </label>
+    </div>`;
   if(t==='footer') return `
     <div class="fl">푸터 유형</div>
     <div class="fv" style="display:flex;gap:8px">
@@ -417,7 +464,7 @@ function render() {
     <div class="block-item${b.open?' active':''}" data-id="${b.id}">
       <div class="block-header" onclick="toggleBlock(${i})">
         <span class="drag-handle">⠿</span>
-        <span class="block-badge">${BLOCK_NAMES[b.type]}</span>
+        <span class="block-badge">${b.type==='banner'&&b.data.bannerType==='agenthub'?'AgentHub배너':BLOCK_NAMES[b.type]}</span>
         <span class="block-summary">${getSummary(b)}</span>
         <div class="block-actions">
           <button class="ba" onclick="event.stopPropagation();moveBlock(${i},-1)">↑</button>
@@ -450,7 +497,12 @@ function blockToHTML(b) {
   const FF = "font-family:'맑은고딕','Malgun Gothic',Helvetica,sans-serif";
   if(b.type==='logo') return `<tr><td><img width="600" src="https://kr.object.ncloudstorage.com/tripbtoz-image/email/mail_mange_templates/logo_frame.png" style="display:block;width:100%"></td></tr>`;
   if(b.type==='divider') return `<tr><td style="padding:0 32px"><div style="height:1px;background:#eee"></div></td></tr>`;
-  if(b.type==='banner') return `<tr><td align="center" style="padding:20px 0"><img src="https://asset.tripbtoz.com/email/mail_mange_templates/banner.jpg" width="536" style="display:inline-block;border:0"></td></tr>`;
+  if(b.type==='banner') {
+    const bannerSrc = b.data.bannerType === 'agenthub'
+      ? 'https://asset.tripbtoz.com/email/mail_mange_templates/banner_agenthub.jpg'
+      : 'https://asset.tripbtoz.com/email/mail_mange_templates/banner.jpg';
+    return `<tr><td align="center" style="padding:20px 0"><img src="${bannerSrc}" width="536" style="display:inline-block;border:0"></td></tr>`;
+  }
   if(b.type==='footer') {
     const isMarketing = (b.data.footerType || 'marketing') === 'marketing';
     if(isMarketing) {
@@ -535,9 +587,16 @@ Copyright (c) 2015. Tripbtoz, Inc. All Rights Reserved.
     const card=h=>{
       const priceNum = parseInt(String(h.price||'').replace(/[^0-9]/g,'')) || 0;
       const fmtPrice = priceNum > 0 ? priceNum.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' 원~' : '';
-      const discBadge = h.discount ? `<div style="position:absolute;top:8px;left:8px;background:#f43f5e;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;">-${h.discount}%</div>` : '';
-      const imgBox = `<div style="position:relative;">${h.img ? `<img src="${h.img}" width="100%" style="display:block;height:150px;object-fit:cover;">` : `<div style="width:100%;height:150px;background:#c8b9a8;"></div>`}${discBadge}</div>`;
-      const cardInner = `<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;background:#fff"><tr><td>${imgBox}</td></tr><tr><td style="padding:12px 14px;${FF}"><div style="font-size:14px;font-weight:bold;color:#181818;margin-bottom:3px">${h.name||'호텔명'}</div><div style="font-size:12px;color:#818286;margin-bottom:8px">${h.area||''}</div><div style="font-size:16px;font-weight:bold;color:#7B3CFF">${fmtPrice}</div><div style="font-size:11px;color:#818286;margin-top:2px">1박 기준</div></td></tr></table>`;
+      const regularPriceNum = parseInt(String(h.regularPrice||'').replace(/[^0-9]/g,'')) || 0;
+      const fmtRegular = regularPriceNum > 0 ? regularPriceNum.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+      const discBadge = h.discount
+        ? `<span style="display:inline-block;background:#f43f5e;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;">${h.discount}% 할인</span>`
+        : `<span style="display:inline-block;height:20px;"></span>`;
+      const originalPrice = (h.discount && fmtRegular)
+        ? `<div style="font-size:12px;color:#aaa;text-decoration:line-through;margin-bottom:2px">${fmtRegular} 원</div>`
+        : `<div style="height:18px;"></div>`;
+      const imgBox = h.img ? `<img src="${h.img}" width="100%" style="display:block;height:150px;object-fit:cover;">` : `<div style="width:100%;height:150px;background:#c8b9a8;"></div>`;
+      const cardInner = `<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;background:#fff"><tr><td>${imgBox}</td></tr><tr><td style="padding:12px 14px;${FF}"><div style="font-size:14px;font-weight:bold;color:#181818;margin-bottom:3px;min-height:40px;line-height:1.4">${h.name||'호텔명'}</div><div style="font-size:12px;color:#818286;margin-bottom:8px">${h.area||''}</div><div style="margin-bottom:6px">${discBadge}</div>${originalPrice}<div style="font-size:16px;font-weight:bold;color:#7B3CFF">${fmtPrice}</div><div style="font-size:11px;color:#818286;margin-top:2px">1박 기준</div></td></tr></table>`;
       return h.link ? `<a href="${h.link}" target="_blank" style="display:block;text-decoration:none;color:inherit">${cardInner}</a>` : cardInner;
     };
     const rows=[];
@@ -1404,48 +1463,62 @@ async function deleteSegment(id, name) {
 // ═══════════════════════════════════════════
 async function renderDashboard() {
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: pending } = await sb.from('email_schedules')
-    .select('*').eq('status', 'pending').order('scheduled_at', { ascending: true });
-
-  const { data: sent } = await sb.from('email_schedules')
-    .select('*').eq('status', 'sent')
-    .gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false });
-
-  const { data: failed } = await sb.from('email_schedules')
-    .select('*').eq('status', 'failed')
-    .gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false });
+  const [{ data: pending }, { data: sent }] = await Promise.all([
+    sb.from('email_schedules').select('*').eq('status', 'pending').order('scheduled_at', { ascending: true }),
+    sb.from('email_schedules').select('*').eq('status', 'sent').gte('sent_at', twoWeeksAgo).order('sent_at', { ascending: false }),
+  ]);
 
   const sentList = sent || [];
-  const failedList = failed || [];
-  const totalSent   = sentList.reduce((s, r) => s + (r.sent_count   || 0), 0);
-  const totalFailed = sentList.reduce((s, r) => s + (r.failed_count || 0), 0);
 
   document.getElementById('kpi-pending').textContent = `${(pending||[]).length}건`;
   document.getElementById('kpi-sent').textContent = `${sentList.length}건`;
-  document.getElementById('kpi-total-sent').textContent = totalSent.toLocaleString() + '명';
-  document.getElementById('kpi-total-failed').textContent = totalFailed > 0 ? totalFailed.toLocaleString() + '명' : '0명';
 
-  // 발송 완료 캠페인 통계 배치 조회
-  const allSentIds = sentList.map(s => s.id);
-  let statsMap = {};
-  if(allSentIds.length > 0) {
-    const { data: events } = await sb.from('email_events')
-      .select('schedule_id, event_type, email_hash')
-      .in('schedule_id', allSentIds);
-    if(events) {
-      allSentIds.forEach(sid => {
-        const evs = events.filter(e => e.schedule_id === sid);
-        statsMap[sid] = {
-          opens:  new Set(evs.filter(e => e.event_type === 'open').map(e => e.email_hash)).size,
-          clicks: new Set(evs.filter(e => e.event_type === 'click').map(e => e.email_hash)).size,
-        };
-      });
+  renderDashCalendar(pending || []);
+  renderDashSection('dash-pending-list', pending || [], 'pending', {});
+  renderDashSection('dash-sent-list', sentList.slice(0, 10), 'sent', {});
+}
+
+function renderDashCalendar(pendingList) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  // 이번 달 pending 날짜 맵
+  const pendingDays = {};
+  for(const s of pendingList) {
+    if(!s.scheduled_at) continue;
+    const d = new Date(s.scheduled_at);
+    if(d.getFullYear() === year && d.getMonth() === month) {
+      const day = d.getDate();
+      if(!pendingDays[day]) pendingDays[day] = [];
+      pendingDays[day].push(s.subject || '발송 예약');
     }
   }
 
-  renderDashSection('dash-pending-list', pending || [], 'pending', {});
-  renderDashSection('dash-sent-list', sentList, 'sent', statsMap);
-  renderDashSection('dash-failed-list', failedList, 'failed', {});
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthName = now.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long' });
+
+  let html = `<div class="dash-cal">
+    <div class="dash-cal-header">${monthName}</div>
+    <div class="dash-cal-grid">
+      <div class="dash-cal-dow">일</div><div class="dash-cal-dow">월</div><div class="dash-cal-dow">화</div>
+      <div class="dash-cal-dow">수</div><div class="dash-cal-dow">목</div><div class="dash-cal-dow">금</div><div class="dash-cal-dow">토</div>`;
+
+  for(let i = 0; i < firstDay; i++) html += `<div class="dash-cal-day empty"></div>`;
+
+  for(let d = 1; d <= daysInMonth; d++) {
+    const isToday = d === now.getDate();
+    const hasPending = !!pendingDays[d];
+    const titles = hasPending ? pendingDays[d].join('\n') : '';
+    html += `<div class="dash-cal-day${isToday ? ' today' : ''}${hasPending ? ' has-pending' : ''}" title="${titles}">
+      <span class="dash-cal-num">${d}</span>
+      ${hasPending ? `<span class="dash-cal-dot" title="${titles}">${pendingDays[d].length}</span>` : ''}
+    </div>`;
+  }
+
+  html += `</div></div>`;
+  document.getElementById('dash-calendar').innerHTML = html;
 }
 
 const SCHEDULE_TYPE_LABEL = { once: '1회성', daily: '매일', weekly: '매주', biweekly: '격주', monthly: '매월' };
@@ -1481,21 +1554,15 @@ function renderDashSection(containerId, list, type, statsMap = {}) {
          <button class="btn-schedule btn-sm" onclick="markSent('${s.id}')">발송 완료 처리</button>`
       : '';
 
-    const sentCount = s.sent_count || 0;
-    const stats = statsMap[s.id] || {};
-    const openRate  = sentCount > 0 && stats.opens  ? Math.round(stats.opens  / sentCount * 100) : null;
-    const clickRate = sentCount > 0 && stats.clicks ? Math.round(stats.clicks / sentCount * 100) : null;
+    const sentCount  = s.sent_count   || 0;
+    const failCount  = s.failed_count || 0;
+    const totalCount = sentCount + failCount;
 
-    const sentStats = type === 'sent'
-      ? `<div class="dash-card-stats">
-           <span class="dash-stat-sent">✔ ${sentCount.toLocaleString()}명 발송</span>
-           ${stats.opens  != null ? `<span class="dash-stat-open">👁 ${stats.opens.toLocaleString()}명 열람${openRate != null ? ` (${openRate}%)` : ''}</span>` : ''}
-           ${stats.clicks != null ? `<span class="dash-stat-click">🖱 ${stats.clicks.toLocaleString()}명 클릭${clickRate != null ? ` (${clickRate}%)` : ''}</span>` : ''}
-           ${s.failed_count > 0 ? `<span class="dash-stat-failed">✘ ${s.failed_count.toLocaleString()}명 실패</span>` : ''}
-         </div>`
-      : type === 'failed'
-      ? `<div class="dash-card-stats"><span class="dash-stat-failed">✘ ${s.failed_count?.toLocaleString()||0}명 실패</span></div>`
-      : '';
+    const countStats = totalCount > 0 ? `<div class="dash-card-stats">
+      <span class="dash-stat-total">대상 ${totalCount.toLocaleString()}명</span>
+      <span class="dash-stat-sent">✔ ${sentCount.toLocaleString()}명</span>
+      <span class="dash-stat-failed">✘ ${failCount.toLocaleString()}명</span>
+    </div>` : '';
 
     const clickAttr = type === 'sent'
       ? `onclick="openCampaignStats('${s.id}','${(s.subject||'').replace(/'/g,"\\'")}',${sentCount})" style="cursor:pointer"`
@@ -1511,7 +1578,7 @@ function renderDashSection(containerId, list, type, statsMap = {}) {
         </div>
         <div class="dash-card-subject">${s.subject || '-'}</div>
         <div class="dash-card-seg">${s.segment_name ? '<span class="dash-arrow">→</span> ' + s.segment_name : '세그먼트 없음'}</div>
-        ${sentStats}
+        ${countStats}
       </div>
       <div class="dash-card-right">
         <div class="dash-card-time">${timeStr}</div>
@@ -2386,14 +2453,69 @@ async function generateFromListPrompt() {
 async function generateSeasonPromotion() {
   const btn = document.getElementById('list-season-btn');
   btn.disabled = true; btn.textContent = '생성 중...';
-  const now = new Date();
-  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const monthName = nextMonth.toLocaleString('ko-KR', { month: 'long' });
-  const prompt = `${monthName} 시즌 여행 호텔 추천 이메일. 국내 여행지 2곳(각 4개 호텔), 해외 여행지 2곳(각 4개 호텔) 포함. 시즌에 어울리는 여행지 선정.`;
   try {
-    await _aiGenerateAndOpen(prompt);
+    const res = await fetch(API_BASE + '/api/ai/season-generate', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await res.json();
+    if(data.error) { showToast('오류: ' + data.error); return; }
+    if(!data.blocks?.length) { showToast('생성 결과가 없습니다'); return; }
+
+    currentTplId = null;
+    nextId = 1;
+    blocks = data.blocks.map(b => ({ ...b, id: nextId++, open: false }));
+    document.getElementById('tpl-name-input').value = data.subject || '';
+    showView('editor');
+    render(); rp();
+    showToast('시즌 프로모션 템플릿 생성 완료! 호텔 이미지를 추가해주세요');
+  } catch(e) {
+    showToast('서버 연결 실패: ' + e.message);
   } finally {
     btn.disabled = false; btn.textContent = '🗓 시즌 프로모션 자동 생성';
+  }
+}
+
+async function generateTriggerMailFromList() {
+  const prompt = document.getElementById('list-ai-prompt').value.trim();
+  if(!prompt) { showToast('위 프롬프트에 변수 목록을 입력해주세요\n예: guest_name, hotel_name, check_in, check_out'); return; }
+
+  const btn = document.getElementById('list-trigger-btn');
+  btn.disabled = true; btn.textContent = '생성 중...';
+
+  // 프롬프트에서 변수 파싱 ({{var}} 또는 쉼표 구분 단어)
+  const varMatches = prompt.match(/\{\{(\w+)\}\}/g);
+  const vars = varMatches
+    ? varMatches.map(v => v.replace(/\{\{|\}\}/g, ''))
+    : prompt.split(',').map(v => v.trim()).filter(v => /^\w+$/.test(v));
+
+  try {
+    const res = await fetch(API_BASE + '/api/ai-generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: `트랜잭셔널 이메일 템플릿 생성. 변수: ${vars.map(v => '{{'+v+'}}').join(', ')}`,
+        type: 'transactional',
+        vars,
+      }),
+    });
+    const data = await res.json();
+    if(data.error) { showToast('AI 오류: ' + data.error); return; }
+    if(!data.blocks?.length) { showToast('생성 결과가 없습니다'); return; }
+
+    currentTplId = null;
+    nextId = 1;
+    // logo + 생성블록 + footer(info)
+    blocks = [
+      { id: nextId++, type: 'logo', open: false, data: {} },
+      ...data.blocks.map(b => ({ ...b, id: nextId++, open: false })),
+      { id: nextId++, type: 'footer', open: false, data: { footerType: 'info' } },
+    ];
+    document.getElementById('tpl-name-input').value = data.subject || '트리거 메일';
+    showView('editor');
+    render(); rp();
+    showToast('트리거 메일 템플릿 생성 완료! 확인 후 저장하세요');
+  } catch(e) {
+    showToast('서버 연결 실패: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '📨 트리거 메일 생성';
   }
 }
 
@@ -2410,7 +2532,11 @@ async function _aiGenerateAndOpen(prompt) {
 
     currentTplId = null;
     nextId = 1;
-    blocks = data.blocks.map(b => ({ ...b, id: nextId++, open: false }));
+    blocks = [
+      { id: nextId++, type: 'logo', open: false, data: {} },
+      ...data.blocks.map(b => ({ ...b, id: nextId++, open: false })),
+      { id: nextId++, type: 'footer', open: false, data: { footerType: 'info' } },
+    ];
     document.getElementById('tpl-name-input').value = data.subject || '';
     showView('editor');
     render(); rp();
@@ -2449,7 +2575,12 @@ async function aiGenerate() {
     if(data.error) { showToast('AI 오류: ' + data.error); return; }
 
     if(data.blocks && Array.isArray(data.blocks)) {
-      blocks = data.blocks;
+      nextId = 1;
+      blocks = [
+        { id: nextId++, type: 'logo', open: false, data: {} },
+        ...data.blocks.map(b => ({ ...b, id: nextId++, open: false })),
+        { id: nextId++, type: 'footer', open: false, data: { footerType: 'info' } },
+      ];
       render();
       rp();
       showToast('AI 생성 완료!');
@@ -2463,4 +2594,284 @@ async function aiGenerate() {
     btn.disabled = false;
     btn.textContent = '✨ 생성';
   }
+}
+
+// ═══════════════════════════════════════════
+// 트리거 설정
+// ═══════════════════════════════════════════
+let triggerMappings = [];
+let editingTriggerId = null;
+
+const TRIGGER_BASE = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+  ? 'http://localhost:3001' : 'https://email-automation-production-7cba.up.railway.app';
+
+let _triggerSecretValue = null;
+let _secretVisible = false;
+
+async function initTriggerPage() {
+  // secret key 로드
+  try {
+    const r = await fetch(`${API_BASE}/api/trigger-secret`);
+    const d = await r.json();
+    _triggerSecretValue = d.value || null;
+  } catch(_) {}
+  renderSecretKey();
+  await loadTriggerMappings();
+}
+
+function renderSecretKey() {
+  const el = document.getElementById('trigger-secret-display');
+  if(!el) return;
+  if(!_triggerSecretValue) {
+    el.textContent = 'Railway Variables에 TRIGGER_SECRET 미설정';
+    el.style.color = '#f87171';
+    return;
+  }
+  el.style.color = '';
+  el.textContent = _secretVisible ? _triggerSecretValue : '••••••••••••••••';
+}
+
+function toggleSecretKey() {
+  _secretVisible = !_secretVisible;
+  renderSecretKey();
+  document.getElementById('trigger-secret-eye-btn').textContent = _secretVisible ? '🙈' : '👁';
+}
+
+function copySecretKey() {
+  if(!_triggerSecretValue) { showToast('설정된 시크릿 키가 없어요'); return; }
+  navigator.clipboard.writeText(_triggerSecretValue);
+  showToast('시크릿 키 복사됐어요');
+}
+
+async function loadTriggerMappings() {
+  const { data, error } = await sb.from('trigger_mappings').select('*').order('created_at');
+  if(error) { showToast('트리거 목록 로드 실패'); return; }
+  triggerMappings = data || [];
+  renderTriggerList();
+}
+
+async function renderTriggerList() {
+  const { data: tpls } = await sb.from('templates').select('id, name, blocks').order('name');
+  const tplMap = Object.fromEntries((tpls || []).map(t => [t.id, t]));
+
+  const el = document.getElementById('trigger-list');
+  if(!triggerMappings.length) {
+    el.innerHTML = '<div style="color:#888;font-size:13px;padding:20px 0">등록된 이벤트가 없습니다. 이벤트를 추가해주세요.</div>';
+    return;
+  }
+
+  el.innerHTML = triggerMappings.map(m => {
+    const tpl = tplMap[m.template_id];
+    const tplName = tpl ? tpl.name : (m.template_id ? '삭제된 템플릿' : null);
+
+    // 템플릿에서 변수 파싱
+    let vars = [];
+    if(tpl?.blocks) {
+      const html = tpl.blocks.map(b => JSON.stringify(b)).join(' ');
+      const matches = html.match(/\{\{(\w+)\}\}/g) || [];
+      vars = [...new Set(matches.map(v => v.replace(/\{\{|\}\}/g, '')))].filter(v => !['UNSUB_URL','UNSUBSCRIBE_URL'].includes(v));
+    }
+
+    const exampleBody = JSON.stringify({
+      event: m.event_name,
+      secret: 'your-secret-key',
+      email: 'user@example.com',
+      data: Object.fromEntries(vars.map(v => [v, `{{${v}}}`])),
+    }, null, 2);
+
+    return `
+    <div class="trigger-card${m.is_active ? '' : ' inactive'}" id="tcard-${m.id}">
+      <div class="trigger-card-header" onclick="toggleTriggerCard('${m.id}')">
+        <div class="trigger-card-header-left">
+          <span class="trigger-event-name">${m.event_name}</span>
+          ${m.description ? `<span class="trigger-desc-badge">${m.description}</span>` : ''}
+          <span class="trigger-tpl-badge">${tplName ? tplName : '<span style="color:#f87171">⚠ 템플릿 미설정</span>'}</span>
+        </div>
+        <div class="trigger-card-header-right">
+          <button class="trigger-toggle ${m.is_active ? 'on' : 'off'}" onclick="event.stopPropagation();toggleTrigger('${m.id}', ${m.is_active})">${m.is_active ? '활성' : '비활성'}</button>
+          <button class="trigger-edit-btn" onclick="event.stopPropagation();openEditTriggerModal('${m.id}')">수정</button>
+          <button class="trigger-del-btn" onclick="event.stopPropagation();deleteTrigger('${m.id}')">삭제</button>
+          <span class="trigger-chevron" id="tchev-${m.id}">▼</span>
+        </div>
+      </div>
+      <div class="trigger-card-body" id="tbody-${m.id}" style="display:none">
+        <div class="trigger-card-body-inner">
+          <div class="trigger-body-row">
+            <span class="trigger-body-label">Endpoint</span>
+            <code class="trigger-body-code">POST ${TRIGGER_BASE}/api/trigger</code>
+            <button class="trigger-copy-btn" onclick="navigator.clipboard.writeText('${TRIGGER_BASE}/api/trigger');showToast('복사됐어요')">복사</button>
+          </div>
+          ${vars.length ? `<div class="trigger-body-row" style="align-items:flex-start">
+            <span class="trigger-body-label">변수</span>
+            <div style="display:flex;flex-wrap:wrap;gap:4px">${vars.map(v => `<code class="trigger-var-chip">{{${v}}}</code>`).join('')}</div>
+          </div>` : ''}
+          <div class="trigger-body-example">
+            <div class="trigger-body-label" style="margin-bottom:6px">Request Body</div>
+            <pre class="trigger-api-pre">${exampleBody}</pre>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleTriggerCard(id) {
+  const body = document.getElementById(`tbody-${id}`);
+  const chev = document.getElementById(`tchev-${id}`);
+  const open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  chev.textContent = open ? '▲' : '▼';
+}
+
+async function openAddTriggerModal() {
+  editingTriggerId = null;
+  document.getElementById('trigger-modal-title').textContent = '이벤트 추가';
+  document.getElementById('trigger-event-name').value = '';
+  document.getElementById('trigger-event-name').disabled = false;
+  document.getElementById('trigger-is-active').checked = true;
+  document.getElementById('trigger-ai-content').style.display = 'none';
+  document.querySelector('.trigger-ai-toggle').textContent = '펼치기';
+  document.getElementById('trigger-ai-vars').value = '';
+  await loadTriggerTplSelect('');
+  document.getElementById('trigger-modal').style.display = 'flex';
+}
+
+function toggleTriggerAiBox() {
+  const content = document.getElementById('trigger-ai-content');
+  const btn = document.querySelector('.trigger-ai-toggle');
+  const open = content.style.display === 'none';
+  content.style.display = open ? 'block' : 'none';
+  btn.textContent = open ? '접기' : '펼치기';
+}
+
+async function generateTriggerTemplate() {
+  const eventName = document.getElementById('trigger-event-name').value.trim();
+  const varsRaw = document.getElementById('trigger-ai-vars').value.trim();
+  if(!varsRaw) { showToast('변수를 입력해주세요'); return; }
+
+  const varList = varsRaw.split(',').map(v => v.trim()).filter(Boolean);
+  const btn = document.getElementById('trigger-ai-gen-btn');
+  btn.textContent = '생성 중...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/ai-generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: `트랜잭셔널 이메일 템플릿을 만들어주세요.
+이벤트: ${eventName || '트랜잭셔널'}
+사용 변수: ${varList.map(v => '{{' + v + '}}').join(', ')}
+
+반드시 reservation 블록을 포함하고, 위 변수들을 예약 내역 표의 행(row)에 적절히 배치해주세요.
+reservation 블록의 rows는 { label: "한국어 라벨", value: "{{변수명}}" } 형태여야 합니다.`,
+        type: 'transactional',
+        vars: varList,
+      }),
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+
+    // subject가 있으면 제거하고 blocks만 사용
+    const generatedBlocks = data.blocks || [];
+
+    // 기본 구조로 wrapping (logo + 생성블록 + footer)
+    let id = 1;
+    const finalBlocks = [
+      { id: id++, type: 'logo',   open: false, data: {} },
+      ...generatedBlocks.map(b => ({ ...b, id: id++, open: false })),
+      { id: id++, type: 'footer', open: false, data: { footerType: 'info' } },
+    ];
+
+    // 템플릿 이름 결정
+    const tplName = data.subject || `${eventName || '자동생성'} 템플릿`;
+
+    // Supabase에 저장
+    const { data: saved, error } = await sb.from('templates').insert({
+      name: tplName,
+      blocks: finalBlocks,
+      html: finalBlocks.map(b => blockToHTML(b)).join(''),
+    }).select('id, name').single();
+    if(error) throw new Error(error.message);
+
+    showToast(`"${saved.name}" 템플릿 생성됐어요`);
+
+    // 드롭다운 갱신 후 자동 선택
+    await loadTriggerTplSelect(saved.id);
+
+    // AI 박스 접기
+    document.getElementById('trigger-ai-content').style.display = 'none';
+    document.querySelector('.trigger-ai-toggle').textContent = '펼치기';
+  } catch(e) {
+    showToast('생성 실패: ' + e.message);
+  } finally {
+    btn.textContent = 'AI 템플릿 생성';
+    btn.disabled = false;
+  }
+}
+
+async function openEditTriggerModal(id) {
+  editingTriggerId = id;
+  const m = triggerMappings.find(t => t.id === id);
+  if(!m) return;
+  document.getElementById('trigger-modal-title').textContent = '이벤트 수정';
+  document.getElementById('trigger-event-name').value = m.event_name;
+  document.getElementById('trigger-event-name').disabled = true;
+  document.getElementById('trigger-description').value = m.description || '';
+  document.getElementById('trigger-is-active').checked = m.is_active;
+  document.getElementById('trigger-ai-content').style.display = 'none';
+  document.querySelector('.trigger-ai-toggle').textContent = '펼치기';
+  await loadTriggerTplSelect(m.template_id || '');
+  document.getElementById('trigger-modal').style.display = 'flex';
+}
+
+async function loadTriggerTplSelect(selectedId) {
+  const { data: tpls } = await sb.from('templates').select('id, name').order('name');
+  const sel = document.getElementById('trigger-tpl-select');
+  sel.innerHTML = '<option value="">템플릿 선택...</option>' +
+    (tpls || []).map(t => `<option value="${t.id}" ${t.id === selectedId ? 'selected' : ''}>${t.name}</option>`).join('');
+}
+
+function closeTriggerModal() {
+  document.getElementById('trigger-modal').style.display = 'none';
+  editingTriggerId = null;
+}
+
+async function saveTriggerMapping() {
+  const eventName = document.getElementById('trigger-event-name').value.trim();
+  const description = document.getElementById('trigger-description').value.trim();
+  const templateId = document.getElementById('trigger-tpl-select').value || null;
+  const isActive = document.getElementById('trigger-is-active').checked;
+
+  if(!eventName) { showToast('이벤트 이름을 입력해주세요'); return; }
+
+  if(editingTriggerId) {
+    const { error } = await sb.from('trigger_mappings').update({ template_id: templateId, is_active: isActive, description: description || null }).eq('id', editingTriggerId);
+    if(error) { showToast('저장 실패: ' + error.message); return; }
+  } else {
+    const { error } = await sb.from('trigger_mappings').insert({ event_name: eventName, template_id: templateId, is_active: isActive, description: description || null });
+    if(error) { showToast('저장 실패: ' + error.message); return; }
+  }
+
+  closeTriggerModal();
+  await loadTriggerMappings();
+  showToast('저장됐어요');
+}
+
+async function toggleTrigger(id, current) {
+  await sb.from('trigger_mappings').update({ is_active: !current }).eq('id', id);
+  await loadTriggerMappings();
+}
+
+async function deleteTrigger(id) {
+  if(!confirm('삭제하시겠어요?')) return;
+  await sb.from('trigger_mappings').delete().eq('id', id);
+  await loadTriggerMappings();
+  showToast('삭제됐어요');
+}
+
+function copyTriggerEndpoint() {
+  const url = document.getElementById('trigger-endpoint-url').textContent.replace('POST ', '');
+  navigator.clipboard.writeText(url);
+  showToast('복사됐어요');
 }

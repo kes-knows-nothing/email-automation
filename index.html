@@ -28,10 +28,10 @@
   <div class="topbar-center">
     <div id="topbar-nav" class="topbar-nav">
       <button class="nav-tab active" id="nav-template" onclick="goTab('list')">템플릿</button>
-      <button class="nav-tab" id="nav-dashboard" onclick="goTab('dashboard')">현황판</button>
+      <button class="nav-tab" id="nav-dashboard" onclick="goTab('dashboard')">발송 현황</button>
       <button class="nav-tab" id="nav-segment" onclick="goTab('segment')">세그먼트</button>
       <button class="nav-tab" id="nav-sql" onclick="goTab('sql')">SQL</button>
-      <button class="nav-tab" id="nav-automation" onclick="goTab('automation')">자동화</button>
+      <button class="nav-tab" id="nav-trigger" onclick="goTab('trigger')">트리거</button>
     </div>
     <input id="tpl-name-input" placeholder="템플릿 이름 입력..." style="display:none">
   </div>
@@ -47,8 +47,8 @@
 <div id="view-dashboard" class="view">
   <div class="list-header">
     <div>
-      <div class="list-title">현황판</div>
-      <div class="list-sub">최근 2주 발송 현황</div>
+      <div class="list-title">발송 현황</div>
+      <div class="list-sub">발송 스케줄 및 최근 현황</div>
     </div>
   </div>
   <div class="dash-kpi-row">
@@ -56,31 +56,27 @@
       <div class="dash-kpi-label">발송 대기</div>
       <div class="dash-kpi-value" id="kpi-pending">—</div>
     </div>
-    <div class="dash-kpi-card">
-      <div class="dash-kpi-label">완료 (2주)</div>
+    <div class="dash-kpi-card accent">
+      <div class="dash-kpi-label">발송 완료 (2주)</div>
       <div class="dash-kpi-value" id="kpi-sent">—</div>
     </div>
-    <div class="dash-kpi-card accent">
-      <div class="dash-kpi-label">총 발송 인원</div>
-      <div class="dash-kpi-value" id="kpi-total-sent">—</div>
-    </div>
-    <div class="dash-kpi-card danger">
-      <div class="dash-kpi-label">총 실패 인원</div>
-      <div class="dash-kpi-value" id="kpi-total-failed">—</div>
-    </div>
   </div>
-  <div class="dash-columns">
-    <div class="dash-col">
-      <div class="dash-section-title">⏳ 발송 대기</div>
-      <div id="dash-pending-list" class="dash-list"></div>
+  <div class="dash-body">
+    <div class="dash-calendar-col">
+      <div class="dash-section-title">📅 발송 스케줄</div>
+      <div id="dash-calendar"></div>
     </div>
-    <div class="dash-col">
-      <div class="dash-section-title">✅ 발송 완료</div>
-      <div id="dash-sent-list" class="dash-list"></div>
-    </div>
-    <div class="dash-col">
-      <div class="dash-section-title" style="color:#f87171">❌ 발송 실패</div>
-      <div id="dash-failed-list" class="dash-list"></div>
+    <div class="dash-right-col">
+      <div class="dash-two-col">
+        <div>
+          <div class="dash-section-title">⏳ 발송 대기</div>
+          <div id="dash-pending-list" class="dash-list"></div>
+        </div>
+        <div>
+          <div class="dash-section-title">✅ 최근 발송 완료</div>
+          <div id="dash-sent-list" class="dash-list"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -101,7 +97,14 @@
       <button class="list-ai-btn" id="list-ai-btn" onclick="generateFromListPrompt()">✨ 생성</button>
     </div>
     <div class="list-ai-preset-row">
-      <button class="list-ai-btn-preset" id="list-season-btn" onclick="generateSeasonPromotion()">🗓 시즌 프로모션 자동 생성</button>
+      <div class="list-ai-split-btn">
+        <button class="list-ai-split-main" id="list-season-btn" onclick="generateSeasonPromotion()">🗓 시즌 프로모션 자동 생성</button>
+        <div class="list-ai-split-info">
+          <span>i</span>
+          <div class="list-ai-tooltip">다음 달 기준 시즌 여행지 자동 선정<br>· 국내 여행지 2곳 × 호텔 4개<br>· 해외 여행지 2곳 × 호텔 4개<br>· 최저가 있는 호텔만 포함<br>· 차주 월/화 체크인 기준</div>
+        </div>
+      </div>
+      <button class="list-ai-trigger-btn" id="list-trigger-btn" onclick="generateTriggerMailFromList()">📨 트리거 메일 생성</button>
     </div>
   </div>
   <div class="tpl-grid" id="tpl-grid"></div>
@@ -458,8 +461,70 @@
 <!-- ══ SETTINGS MODAL ══ -->
 
 <!-- ══ AUTOMATION VIEW ══ -->
-<div id="view-automation" class="view auto-view">
-  <!-- 왼쪽 설정 패널 -->
+<div id="view-trigger" class="view">
+  <div class="list-header">
+    <div>
+      <div class="list-title">트리거 설정</div>
+      <div class="list-sub">외부 API 호출 시 자동 발송할 이벤트와 템플릿을 연결하세요</div>
+    </div>
+    <button class="btn-primary" onclick="openAddTriggerModal()">+ 이벤트 추가</button>
+  </div>
+
+  <div class="trigger-secret-box">
+    <div class="trigger-secret-label">🔑 Secret Key <span style="font-size:11px;color:#555;font-weight:400">(모든 이벤트 공통)</span></div>
+    <div class="trigger-secret-row">
+      <code class="trigger-secret-value" id="trigger-secret-display">••••••••••••••••</code>
+      <button class="trigger-secret-eye" onclick="toggleSecretKey()" id="trigger-secret-eye-btn" title="보기/숨기기">👁</button>
+      <button class="trigger-copy-btn" onclick="copySecretKey()">복사</button>
+    </div>
+    <div style="font-size:11px;color:#555;margin-top:6px">Railway Variables → <code style="font-size:11px;color:#7B9CBB">TRIGGER_SECRET</code> 에 설정된 값</div>
+  </div>
+
+  <div id="trigger-list" class="trigger-list"></div>
+</div>
+
+<!-- 트리거 추가 모달 -->
+<div id="trigger-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeTriggerModal()">
+  <div class="modal-box" style="width:420px">
+    <div class="modal-header">
+      <span id="trigger-modal-title">이벤트 추가</span>
+      <button class="modal-close" onclick="closeTriggerModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="fl">이벤트 이름 <small style="color:#888">(API에서 사용하는 키값)</small></div>
+      <input class="fi" id="trigger-event-name" placeholder="예: booking_confirmed">
+      <div class="fl" style="margin-top:12px">설명 <small style="color:#888">(선택, 내부 식별용)</small></div>
+      <input class="fi" id="trigger-description" placeholder="예: 예약 완료 메일" style="margin-top:4px">
+      <div class="fl" style="margin-top:12px">사용할 템플릿</div>
+      <select class="fi" id="trigger-tpl-select" style="margin-top:4px">
+        <option value="">템플릿 선택...</option>
+      </select>
+      <div class="trigger-ai-gen-box" id="trigger-ai-gen-box">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:12px;color:#888">✨ AI로 템플릿 자동 생성</span>
+          <button class="trigger-ai-toggle" onclick="toggleTriggerAiBox()">펼치기</button>
+        </div>
+        <div id="trigger-ai-content" style="display:none">
+          <div style="font-size:12px;color:#888;margin-bottom:6px">변수 목록 <small>(쉼표 구분, 예약내역 표에 자동 반영)</small></div>
+          <input class="fi" id="trigger-ai-vars" placeholder="예: guest_name, hotel_name, check_in, check_out, booking_id" style="font-size:12px">
+          <button class="btn-primary" style="width:100%;margin-top:8px;font-size:13px" onclick="generateTriggerTemplate()" id="trigger-ai-gen-btn">AI 템플릿 생성</button>
+        </div>
+      </div>
+      <div class="fl" style="margin-top:12px">활성화</div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:4px;cursor:pointer">
+        <input type="checkbox" id="trigger-is-active" checked>
+        <span style="font-size:13px;color:#ccc">활성화 상태로 등록</span>
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeTriggerModal()">취소</button>
+      <button class="btn-primary" onclick="saveTriggerMapping()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- view-automation removed -->
+<div id="view-automation" class="view" style="display:none!important">
   <div class="auto-left">
 
     <!-- ① 발송 주기 -->
