@@ -404,9 +404,11 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, presetK
         html = html.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
       }
       const unsubUrl = getUnsubUrl(email);
+      const sendDate = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
       html = html.replace(/\{\{UNSUB_URL\}\}/g, unsubUrl)
                  .replace(/#\{UNSUBSCRIBE_URL\}/g, unsubUrl)
-                 .replace(/\{\{UNSUBSCRIBE_URL\}\}/g, unsubUrl);
+                 .replace(/\{\{UNSUBSCRIBE_URL\}\}/g, unsubUrl)
+                 .replace(/\{\{SEND_DATE\}\}/g, sendDate);
 
       const eHash = Buffer.from(email).toString('base64url');
 
@@ -608,7 +610,8 @@ app.get('/track/open', async (req, res) => {
   res.send(PIXEL_GIF);
   const { sid, e } = req.query;
   if(sid) {
-    try { await sb.from('email_events').insert({ schedule_id: sid, email_hash: e || null, event_type: 'open' }); } catch(_) {}
+    const { error } = await sb.from('email_events').insert({ schedule_id: sid, email_hash: e || null, event_type: 'open' });
+    if(error) console.error('[track/open] Supabase error:', error.message, '| sid:', sid);
   }
 });
 
@@ -617,7 +620,8 @@ app.get('/track/click', async (req, res) => {
   const target = url ? decodeURIComponent(url) : 'https://www.tripbtoz.com';
   res.redirect(302, target);
   if(sid && url) {
-    try { await sb.from('email_events').insert({ schedule_id: sid, email_hash: e || null, event_type: 'click', url: target }); } catch(_) {}
+    const { error } = await sb.from('email_events').insert({ schedule_id: sid, email_hash: e || null, event_type: 'click', url: target });
+    if(error) console.error('[track/click] Supabase error:', error.message, '| sid:', sid);
   }
 });
 
@@ -625,25 +629,67 @@ app.get('/track/click', async (req, res) => {
 app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
   const { scheduleId } = req.params;
   const { data, error } = await sb.from('email_events')
-    .select('event_type, url, email_hash')
+    .select('event_type, url, email_hash, created_at')
     .eq('schedule_id', scheduleId);
   if(error) return res.status(400).json({ error: error.message });
 
-  const opens  = new Set(data.filter(e => e.event_type === 'open').map(e => e.email_hash)).size;
-  const clicks = new Set(data.filter(e => e.event_type === 'click').map(e => e.email_hash)).size;
-  const totalClicks = data.filter(e => e.event_type === 'click').length;
+  const openEvents  = data.filter(e => e.event_type === 'open');
+  const clickEvents = data.filter(e => e.event_type === 'click');
+  const opens  = new Set(openEvents.map(e => e.email_hash)).size;
+  const clicks = new Set(clickEvents.map(e => e.email_hash)).size;
+  const totalClicks = clickEvents.length;
 
-  // URL별 클릭 집계
+  // URL별 클릭 집계 — hotel_id 추출
   const urlMap = {};
-  data.filter(e => e.event_type === 'click').forEach(e => {
+  clickEvents.forEach(e => {
     const key = e.url || '-';
     urlMap[key] = (urlMap[key] || 0) + 1;
   });
   const urlStats = Object.entries(urlMap)
     .sort((a, b) => b[1] - a[1])
-    .map(([url, count]) => ({ url, count }));
+    .map(([url, count]) => {
+      const hotelMatch = url.match(/\/hotels\/(\d+)/);
+      return { url, count, hotel_id: hotelMatch ? hotelMatch[1] : null };
+    });
 
-  res.json({ opens, clicks, totalClicks, urlStats });
+  // hotel_id 있는 것들 이름 일괄 조회
+  const hotelIds = [...new Set(urlStats.filter(u => u.hotel_id).map(u => u.hotel_id))];
+  const hotelNames = {};
+  if(hotelIds.length > 0) {
+    try {
+      const sql = `SELECT hotel_id, name_kr FROM tripbtoz.hotels WHERE hotel_id IN (${hotelIds.map(id => pool.escape(id)).join(',')})`;
+      const result = await runQuery(sql);
+      if(result.type === 'select') {
+        const idIdx   = result.columns.map(c => c.toLowerCase()).indexOf('hotel_id');
+        const nameIdx = result.columns.map(c => c.toLowerCase()).indexOf('name_kr');
+        result.rows.forEach(r => { if(idIdx >= 0 && nameIdx >= 0) hotelNames[String(r[idIdx])] = r[nameIdx]; });
+      }
+    } catch(_) {}
+  }
+
+  res.json({ opens, clicks, totalClicks, urlStats, hotelNames });
+});
+
+// 캠페인 통계 CSV 다운로드
+app.get('/api/campaign-stats/:scheduleId/csv', async (req, res) => {
+  const { scheduleId } = req.params;
+  const { data: schedule } = await sb.from('email_schedules').select('subject, sent_count').eq('id', scheduleId).single();
+  const { data, error } = await sb.from('email_events')
+    .select('event_type, url, email_hash, created_at')
+    .eq('schedule_id', scheduleId);
+  if(error) return res.status(400).send('error');
+
+  const rows = [['이벤트', '이메일(해시)', 'URL', '시간']];
+  for(const e of data) {
+    rows.push([e.event_type, e.email_hash || '', e.url || '', e.created_at || '']);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const subject = schedule?.subject || scheduleId;
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="stats_${subject.slice(0,20).replace(/[^a-zA-Z0-9가-힣]/g,'_')}_${scheduleId}.csv"`,
+  });
+  res.send('\uFEFF' + csv); // BOM for Excel
 });
 
 // 호텔 스마트 조회
@@ -928,9 +974,22 @@ app.post('/api/ai/season-generate', async (req, res) => {
   }
 
   async function getHotelsForCity(dest) {
-    const whereClause = dest.type === 'domestic'
-      ? `h.city_kr LIKE ${pool.escape('%' + dest.cityKeyword + '%')}`
-      : `h.country_code = ${pool.escape(dest.countryCode)}`;
+    let whereClause;
+    let fallbackWhereClause = null; // city 필터 결과 부족 시 country_code만으로 재시도
+    if(dest.type === 'domestic') {
+      whereClause = `h.city_kr LIKE ${pool.escape('%' + dest.cityKeyword + '%')}`;
+    } else {
+      // 국가코드 + 영문/한글 도시명 필터 (country_code만 쓰면 도쿄→오키나와 혼입 등 문제)
+      const cityConditions = [];
+      if(dest.cityEn)      cityConditions.push(`h.city LIKE ${pool.escape('%' + dest.cityEn + '%')}`);
+      if(dest.cityKeyword) cityConditions.push(`h.city_kr LIKE ${pool.escape('%' + dest.cityKeyword + '%')}`);
+      const cityFilter = cityConditions.length > 0 ? `(${cityConditions.join(' OR ')})` : null;
+      whereClause = cityFilter
+        ? `h.country_code = ${pool.escape(dest.countryCode)} AND ${cityFilter}`
+        : `h.country_code = ${pool.escape(dest.countryCode)}`;
+      // 발리/푸켓처럼 도시가 서브지역으로 분산된 경우 fallback
+      fallbackWhereClause = `h.country_code = ${pool.escape(dest.countryCode)}`;
+    }
 
     const serverBase = process.env.SERVER_URL || 'http://localhost:3001';
     const { checkIn, checkOut } = getNextMondayDates();
@@ -941,14 +1000,14 @@ app.post('/api/ai/season-generate', async (req, res) => {
 
     while(result.length < 4) {
       const sql = `
-        SELECT h.hotel_id, h.name_kr, h.city_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
+        SELECT h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
         FROM tripbtoz.hotels h
         JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
         LEFT JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
         WHERE MONTH(b.check_in) = ${actualNextMonth}
           AND YEAR(b.check_in) = ${lastYear}
           AND ${whereClause}
-        GROUP BY h.hotel_id, h.name_kr, h.city_kr
+        GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
         ORDER BY booking_cnt DESC
         LIMIT ${batchSize} OFFSET ${offset}`;
 
@@ -958,17 +1017,25 @@ app.post('/api/ai/season-generate', async (req, res) => {
       if(dbResult.type !== 'select' || !dbResult.rows.length) break;
 
       const cols = dbResult.columns.map(c => c.toLowerCase());
-      const hotelIdIdx  = cols.indexOf('hotel_id');
-      const nameIdx     = cols.findIndex(c => ['name_kr','name_ko','name'].includes(c));
-      const cityIdx     = cols.indexOf('city_kr');
-      const thumbIdx    = cols.indexOf('thumbnail');
+      const hotelIdIdx     = cols.indexOf('hotel_id');
+      const nameIdx        = cols.findIndex(c => ['name_kr','name_ko','name'].includes(c));
+      const cityIdx        = cols.indexOf('city_kr');
+      const addr1Idx       = cols.indexOf('address1');
+      const addr2Idx       = cols.indexOf('address2');
+      const countryCodeIdx = cols.indexOf('country_code');
+      const countryKrIdx   = cols.indexOf('country_kr');
+      const thumbIdx       = cols.indexOf('thumbnail');
 
       const batch = dbResult.rows
         .map(r => ({
-          hotel_id:  hotelIdIdx >= 0 ? r[hotelIdIdx] : null,
-          name_kr:   nameIdx    >= 0 ? r[nameIdx]    : '',
-          city_kr:   cityIdx    >= 0 ? r[cityIdx]    : '',
-          thumbnail: thumbIdx   >= 0 ? r[thumbIdx]   : '',
+          hotel_id:     hotelIdIdx     >= 0 ? r[hotelIdIdx]     : null,
+          name_kr:      nameIdx        >= 0 ? r[nameIdx]        : '',
+          city_kr:      cityIdx        >= 0 ? r[cityIdx]        : '',
+          address1:     addr1Idx       >= 0 ? r[addr1Idx]       : '',
+          address2:     addr2Idx       >= 0 ? r[addr2Idx]       : '',
+          country_code: countryCodeIdx >= 0 ? r[countryCodeIdx] : '',
+          country_kr:   countryKrIdx   >= 0 ? r[countryKrIdx]   : '',
+          thumbnail:    thumbIdx       >= 0 ? r[thumbIdx]        : '',
           price_available: false,
         }))
         .filter(h => h.hotel_id && !seenIds.has(h.hotel_id));
@@ -991,9 +1058,80 @@ app.post('/api/ai/season-generate', async (req, res) => {
       offset += batchSize;
     }
 
+    // 도시 필터로 4개 못 채운 경우 (발리/푸켓 등 서브지역 분산 목적지) → country fallback
+    if(result.length < 4 && fallbackWhereClause && fallbackWhereClause !== whereClause) {
+      console.log(`[season] ${dest.name}: city 필터로 ${result.length}개만 확보, country fallback 시도`);
+      const fallbackOffset = 0;
+      let fbOffset = 0;
+      while(result.length < 4) {
+        const sql = `
+          SELECT h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
+          FROM tripbtoz.hotels h
+          JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
+          LEFT JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
+          WHERE MONTH(b.check_in) = ${actualNextMonth}
+            AND YEAR(b.check_in) = ${lastYear}
+            AND ${fallbackWhereClause}
+          GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
+          ORDER BY booking_cnt DESC
+          LIMIT ${batchSize} OFFSET ${fbOffset}`;
+        let fbResult;
+        try { fbResult = await runQuery(sql); } catch(_) { break; }
+        if(fbResult.type !== 'select' || !fbResult.rows.length) break;
+        const cols = fbResult.columns.map(c => c.toLowerCase());
+        const batch = fbResult.rows.map(r => ({
+          hotel_id:     cols.indexOf('hotel_id')     >= 0 ? r[cols.indexOf('hotel_id')]     : null,
+          name_kr:      cols.findIndex(c => ['name_kr','name_ko','name'].includes(c)) >= 0 ? r[cols.findIndex(c => ['name_kr','name_ko','name'].includes(c))] : '',
+          city_kr:      cols.indexOf('city_kr')      >= 0 ? r[cols.indexOf('city_kr')]      : '',
+          address1:     cols.indexOf('address1')     >= 0 ? r[cols.indexOf('address1')]     : '',
+          address2:     cols.indexOf('address2')     >= 0 ? r[cols.indexOf('address2')]     : '',
+          country_code: cols.indexOf('country_code') >= 0 ? r[cols.indexOf('country_code')] : '',
+          country_kr:   cols.indexOf('country_kr')   >= 0 ? r[cols.indexOf('country_kr')]   : '',
+          thumbnail:    cols.indexOf('thumbnail')    >= 0 ? r[cols.indexOf('thumbnail')]    : '',
+          price_available: false,
+        })).filter(h => h.hotel_id && !seenIds.has(h.hotel_id));
+        batch.forEach(h => seenIds.add(h.hotel_id));
+        await Promise.all(batch.map(async h => {
+          try {
+            const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(6000) }).then(r => r.json());
+            if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
+          } catch(_) {}
+        }));
+        result.push(...batch.filter(h => h.price_available));
+        if(fbResult.rows.length < batchSize) break;
+        fbOffset += batchSize;
+      }
+    }
+
+    // 국가코드 → 국기 이모지 (예: 'KR' → '🇰🇷')
+    function toFlagEmoji(code) {
+      if (!code || code.length !== 2) return '';
+      return [...code.toUpperCase()].map(c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)).join('');
+    }
+
+    // 도시명 추출
+    function extractCity(city_kr, address1, destName) {
+      const isCountryCode = /^[A-Z]{2,4}$/.test(city_kr || '');
+      if (!isCountryCode && city_kr && city_kr.trim().length > 0) return city_kr.trim();
+      if (address1 && /[가-힣]/.test(address1)) {
+        const parts = address1.trim().split(/\s+/);
+        return parts.slice(0, 2).join(' ');
+      }
+      return destName || '';
+    }
+
+    // 최종 표시: 🇰🇷 대한민국 · 서울 강남구 / 🇯🇵 일본 · 도쿄
+    function buildArea(city_kr, address1, address2, country_code, country_kr, destName) {
+      const flag    = toFlagEmoji(country_code);
+      const country = country_kr && !/^[A-Z]{2,4}$/.test(country_kr) ? country_kr : '';
+      const city    = extractCity(city_kr, address1, destName);
+      const parts   = [country, city].filter(Boolean);
+      return flag ? `${flag} ${parts.join(' · ')}` : parts.join(' · ');
+    }
+
     return result.slice(0, 4).map(h => ({
       name:          h.name_kr,
-      area:          h.city_kr,
+      area:          buildArea(h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, dest.name),
       price:         h.discounted_price || '',
       regularPrice:  h.regular_price    || '',
       discount:      h.discount_rate    || '',
@@ -1003,11 +1141,22 @@ app.post('/api/ai/season-generate', async (req, res) => {
   }
 
   try {
-    // Step 1. LLM: 5월 여행지 4곳 선정 (국내2 + 해외2) + 설명
+    // Step 1. 이번 달 이미 발송한 여행지 조회
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const { data: historyRows } = await sb
+      .from('season_destination_history')
+      .select('destination_name')
+      .eq('year_month', yearMonth);
+    const usedDestinations = (historyRows || []).map(r => r.destination_name);
+    const excludeNote = usedDestinations.length > 0
+      ? `\n\n⚠️ 이번 달(${monthName})에 이미 추천한 여행지: [${usedDestinations.join(', ')}]\n반드시 위 여행지는 제외하고 새로운 여행지를 선정해주세요.`
+      : '';
+
+    // Step 2. LLM: 여행지 4곳 선정 (국내2 + 해외2) + 설명
     const destinations = await callLLM(
       `트립비토즈 호텔 예약 서비스 이메일 마케터입니다.
 ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4곳을 선정해주세요.
-해외 여행지는 ISO 2자리 countryCode도 포함해주세요 (일본=JP, 태국=TH, 베트남=VN, 싱가포르=SG, 미국=US, 프랑스=FR 등).
+해외 여행지는 ISO 2자리 countryCode도 포함해주세요 (일본=JP, 태국=TH, 베트남=VN, 싱가포르=SG, 미국=US, 프랑스=FR 등).${excludeNote}
 
 다음 JSON 형식으로만 응답하세요:
 {
@@ -1015,19 +1164,19 @@ ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4�
   "titleText": "이메일 헤드라인 (30자 이내)",
   "introText": "전체 소개 문구 (2문장)",
   "destinations": [
-    { "name": "제주도", "type": "domestic", "cityKeyword": "제주", "description": "여행지 소개 2~3문장" },
-    { "name": "부산", "type": "domestic", "cityKeyword": "부산", "description": "여행지 소개 2~3문장" },
-    { "name": "도쿄", "type": "international", "countryCode": "JP", "description": "여행지 소개 2~3문장" },
-    { "name": "방콕", "type": "international", "countryCode": "TH", "description": "여행지 소개 2~3문장" }
+    { "name": "제주도", "type": "domestic", "cityKeyword": "제주", "description": "여행지 소개 3~4문장. 계절감, 추천 활동, 분위기를 담아 이메일 독자가 여행을 상상할 수 있게 작성" },
+    { "name": "부산", "type": "domestic", "cityKeyword": "부산", "description": "여행지 소개 3~4문장. 계절감, 추천 활동, 분위기를 담아 이메일 독자가 여행을 상상할 수 있게 작성" },
+    { "name": "도쿄", "type": "international", "countryCode": "JP", "cityEn": "Tokyo", "cityKeyword": "도쿄", "description": "여행지 소개 3~4문장. 계절감, 추천 활동, 분위기를 담아 이메일 독자가 여행을 상상할 수 있게 작성" },
+    { "name": "방콕", "type": "international", "countryCode": "TH", "cityEn": "Bangkok", "cityKeyword": "방콕", "description": "여행지 소개 3~4문장. 계절감, 추천 활동, 분위기를 담아 이메일 독자가 여행을 상상할 수 있게 작성" }
   ]
-}`, 1500);
+}`, 2500);
 
-    // Step 2. 여행지별 DB 호텔 병렬 조회
+    // Step 3. 여행지별 DB 호텔 병렬 조회
     const hotelsByDest = await Promise.all(
       destinations.destinations.map(d => getHotelsForCity(d))
     );
 
-    // Step 3. 블록 조립
+    // Step 4. 블록 조립
     const blocks = [{ type: 'logo', data: {} }];
     blocks.push({ type: 'title', data: { text: destinations.titleText || `${monthName} 추천 여행지` } });
     blocks.push({ type: 'text',  data: { text: destinations.introText || '' } });
@@ -1039,9 +1188,25 @@ ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4�
       blocks.push({ type: 'hotels',   data: { hotels: hotelsByDest[i] || [] } });
     });
 
-    blocks.push({ type: 'footer', data: { footerType: 'info' } });
+    blocks.push({ type: 'footer', data: { footerType: 'marketing' } });
 
-    res.json({ subject: destinations.subject || `${monthName} 인기 여행지 호텔 특가`, blocks });
+    // Step 5. 이번 발송 여행지 기록 저장
+    const toInsert = destinations.destinations.map(d => ({
+      year_month:        yearMonth,
+      destination_name:  d.name,
+      destination_type:  d.type,
+      country_code:      d.countryCode || null,
+      city_keyword:      d.cityKeyword || null,
+      city_en:           d.cityEn || null,
+    }));
+    await sb.from('season_destination_history').insert(toInsert);
+
+    const usedCount = usedDestinations.length;
+    res.json({
+      subject: destinations.subject || `${monthName} 인기 여행지 호텔 특가`,
+      blocks,
+      meta: { yearMonth, usedBefore: usedDestinations, newDestinations: destinations.destinations.map(d => d.name), sendCount: Math.floor(usedCount / 4) + 1 },
+    });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -1201,4 +1366,7 @@ async function runDueSchedules() {
 setInterval(runDueSchedules, 60 * 1000);
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, '0.0.0.0', () => console.log(`API server running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`API server running on port ${PORT}`);
+  console.log(`[트래킹 URL] SERVER_URL = ${process.env.SERVER_URL || '⚠️  미설정 (localhost 사용 중)'}`);
+});

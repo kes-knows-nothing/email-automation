@@ -509,7 +509,7 @@ function blockToHTML(b) {
       return `<tr><td style="padding:32px 0">
 <table style="max-width:600px;min-width:320px;width:100%;margin:0 auto;color:#222;word-break:keep-all;"><tbody>
 <tr><td width="32"></td><td style="padding-bottom:10px;font-size:12px;color:#a0a0a0;line-height:20px;vertical-align:top;${FF}">
-<p>본 메일은 정보통신망 이용 촉진 및 정보 보호 등에 관한 법률 시행 규칙에 의거하여 <br>2024년 6월 3일 트립비토즈 회원님의 이메일 수신동의 여부를 확인 후 보내드리고 있습니다.<br>광고정보수신 정보의 변경을 원하시는 경우, [트립비토즈 앱 - 마이 탭 - 설정]에서 광고 수신을 거부하실 수 있습니다.</p>
+<p>본 메일은 정보통신망 이용 촉진 및 정보 보호 등에 관한 법률 시행 규칙에 의거하여 <br>{{SEND_DATE}} 트립비토즈 회원님의 이메일 수신동의 여부를 확인 후 보내드리고 있습니다.<br>광고정보수신 정보의 변경을 원하시는 경우, [트립비토즈 앱 - 마이 탭 - 설정]에서 광고 수신을 거부하실 수 있습니다.</p>
 <p>메일 수신을 원치 않으시면 <a href="{{UNSUB_URL}}" target="_blank" style="color:#B3B3B3;">[수신거부]</a>를 클릭하세요.</p>
 </td></tr>
 <tr><td width="32"></td><td style="padding-bottom:10px;font-size:12px;color:#a0a0a0;line-height:18px;vertical-align:top;${FF}">
@@ -589,15 +589,25 @@ Copyright (c) 2015. Tripbtoz, Inc. All Rights Reserved.
       const fmtPrice = priceNum > 0 ? priceNum.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' 원~' : '';
       const regularPriceNum = parseInt(String(h.regularPrice||'').replace(/[^0-9]/g,'')) || 0;
       const fmtRegular = regularPriceNum > 0 ? regularPriceNum.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
-      const discBadge = h.discount
-        ? `<span style="display:inline-block;background:#f43f5e;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;">${h.discount}% 할인</span>`
-        : `<span style="display:inline-block;height:20px;"></span>`;
-      const originalPrice = (h.discount && fmtRegular)
-        ? `<div style="font-size:12px;color:#aaa;text-decoration:line-through;margin-bottom:2px">${fmtRegular} 원</div>`
-        : `<div style="height:18px;"></div>`;
-      const imgBox = h.img ? `<img src="${h.img}" width="100%" style="display:block;height:150px;object-fit:cover;">` : `<div style="width:100%;height:150px;background:#c8b9a8;"></div>`;
-      const cardInner = `<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;background:#fff"><tr><td>${imgBox}</td></tr><tr><td style="padding:12px 14px;${FF}"><div style="font-size:14px;font-weight:bold;color:#181818;margin-bottom:3px;min-height:40px;line-height:1.4">${h.name||'호텔명'}</div><div style="font-size:12px;color:#818286;margin-bottom:8px">${h.area||''}</div><div style="margin-bottom:6px">${discBadge}</div>${originalPrice}<div style="font-size:16px;font-weight:bold;color:#7B3CFF">${fmtPrice}</div><div style="font-size:11px;color:#818286;margin-top:2px">1박 기준</div></td></tr></table>`;
-      return h.link ? `<a href="${h.link}" target="_blank" style="display:block;text-decoration:none;color:inherit">${cardInner}</a>` : cardInner;
+      // Image area: background-image on <td> so overlay text sits on top naturally
+      const imgBg = h.img ? `background-image:url('${h.img}');background-size:cover;background-position:center;` : `background:#c8b9a8;`;
+      const badge = h.discount
+        ? `<table cellpadding="0" cellspacing="0"><tr><td style="background:#f43f5e;color:#fff;font-size:11px;font-weight:700;padding:3px 9px;border-radius:10px;line-height:16px;">${h.discount}% 할인</td></tr></table>`
+        : '';
+      // Two inner rows: badge top, name+area bottom with gradient
+      const imgInner = `<table cellpadding="0" cellspacing="0" width="100%" height="190"><tr><td style="padding:10px 10px 0;vertical-align:top;height:100px;">${badge}</td></tr><tr><td style="background:linear-gradient(rgba(0,0,0,0) 0%,rgba(0,0,0,0.68) 100%);padding:16px 12px 14px;vertical-align:bottom;height:90px;overflow:hidden;"><div style="color:#fff;font-size:13px;font-weight:700;line-height:1.35;margin-bottom:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${h.name||'호텔명'}</div><div style="color:rgba(255,255,255,0.82);font-size:11px;white-space:nowrap;overflow:hidden;">${h.area||''}</div></td></tr></table>`;
+      const imgRow = `<tr><td style="${imgBg}height:190px;border-radius:8px 8px 0 0;padding:0;font-size:0;line-height:0;">${imgInner}</td></tr>`;
+      // Price area — 할인 있으면 정가+할인가 나란히, 없으면 가격만
+      const priceRow = (h.discount && fmtRegular)
+        ? `<tr><td style="padding:10px 12px 4px;vertical-align:middle;">
+            <span style="font-size:12px;color:#aaa;text-decoration:line-through;margin-right:6px;">${fmtRegular} 원</span><span style="font-size:17px;font-weight:800;color:#7B3CFF;">${fmtPrice}</span>
+           </td></tr>`
+        : `<tr><td style="padding:10px 12px 4px;vertical-align:middle;">
+            <span style="font-size:17px;font-weight:800;color:#7B3CFF;">${fmtPrice}</span>
+           </td></tr>`;
+      const basisRow = `<tr><td style="padding:0 12px 12px;"><span style="font-size:11px;color:#999;">1박 기준</span></td></tr>`;
+      const cardInner = `<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#fff;">${imgRow}${priceRow}${basisRow}</table>`;
+      return h.link ? `<a href="${h.link}" target="_blank" style="display:block;text-decoration:none;color:inherit;">${cardInner}</a>` : cardInner;
     };
     const rows=[];
     for(let i=0;i<hs.length;i+=2) rows.push(`<tr><td width="32"></td><td style="padding:0 5px 10px 0;vertical-align:top;width:262px">${card(hs[i])}</td><td style="padding:0 0 10px 5px;vertical-align:top;width:262px">${hs[i+1]?card(hs[i+1]):''}</td><td width="32"></td></tr>`);
@@ -716,6 +726,28 @@ function copyHTML() {
 // ═══════════════════════════════════════════
 // TOAST
 // ═══════════════════════════════════════════
+// ── AI 로딩 오버레이 ──
+let _aiLoadingTimer = null;
+function showAILoading(stages = ['AI 생성 중...']) {
+  const overlay = document.getElementById('ai-loading-overlay');
+  const statusEl = document.getElementById('ai-loading-status');
+  if(!overlay) return;
+  overlay.classList.add('active');
+  statusEl.style.opacity = '1';
+  statusEl.textContent = stages[0];
+  let i = 0;
+  _aiLoadingTimer = setInterval(() => {
+    i = (i + 1) % stages.length;
+    statusEl.style.opacity = '0';
+    setTimeout(() => { statusEl.textContent = stages[i]; statusEl.style.opacity = '1'; }, 300);
+  }, 2800);
+}
+function hideAILoading() {
+  const overlay = document.getElementById('ai-loading-overlay');
+  if(overlay) overlay.classList.remove('active');
+  if(_aiLoadingTimer) { clearInterval(_aiLoadingTimer); _aiLoadingTimer = null; }
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -1589,52 +1621,84 @@ function renderDashSection(containerId, list, type, statsMap = {}) {
 }
 
 async function openCampaignStats(scheduleId, subject, sentCount) {
-  const modal = document.getElementById('schedule-detail-modal');
-  const body  = document.getElementById('schedule-detail-body');
+  const modal   = document.getElementById('schedule-detail-modal');
+  const modalBox = modal.querySelector('.modal-box');
+  const header  = modal.querySelector('.modal-header span');
+  const body    = document.getElementById('schedule-detail-body');
+  const footer  = modal.querySelector('.modal-footer');
+
+  // 캠페인 통계용 모달 크기 확대
+  modalBox.style.width = '680px';
+  header.textContent = '캠페인 통계';
+  footer.innerHTML = `
+    <button class="btn-secondary btn-sm" onclick="downloadCampaignCsv('${scheduleId}','${(subject||'').replace(/'/g,"\\'")}')">CSV 다운로드</button>
+    <button class="btn-secondary btn-sm" onclick="closeScheduleDetail()">닫기</button>`;
+
   body.innerHTML = '<div style="text-align:center;padding:40px;color:#888">통계 불러오는 중...</div>';
   modal.style.display = 'flex';
 
   try {
     const res  = await fetch(`${API_BASE}/api/campaign-stats/${scheduleId}`);
     const data = await res.json();
-    const { opens, clicks, totalClicks, urlStats } = data;
+    const { opens, clicks, totalClicks, urlStats, hotelNames } = data;
     const openRate  = sentCount > 0 ? (opens  / sentCount * 100).toFixed(1) : 0;
     const clickRate = sentCount > 0 ? (clicks / sentCount * 100).toFixed(1) : 0;
 
-    const urlRows = (urlStats || []).map(({ url, count }) => {
-      const label = url.includes('/hotels/') ? `🏨 ${decodeURIComponent(url.match(/query=([^&]+)/)?.[1] || url.split('/hotels/')[1]?.split('?')[0] || url)}` : url.length > 60 ? url.slice(0, 60) + '…' : url;
+    // SERVER_URL이 localhost이면 열람 추적 경고
+    const trackWarning = opens === 0 && sentCount > 0
+      ? `<div style="background:#2a1a0a;border:1px solid #7c4a00;border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;margin-bottom:14px">
+          ⚠️ 열람 수가 0입니다. 서버가 외부에서 접근 가능한 URL이어야 열람 추적이 작동합니다. <br>
+          <span style="color:#888">.env의 SERVER_URL을 공개 URL로 설정해주세요.</span>
+        </div>` : '';
+
+    const urlRows = (urlStats || []).map(({ url, count, hotel_id }) => {
+      let label;
+      if(hotel_id && hotelNames && hotelNames[hotel_id]) {
+        label = `🏨 ${hotelNames[hotel_id]}`;
+      } else if(hotel_id) {
+        label = `🏨 호텔 #${hotel_id}`;
+      } else {
+        label = url.length > 55 ? url.slice(0, 55) + '…' : url;
+      }
       const pct = totalClicks > 0 ? Math.round(count / totalClicks * 100) : 0;
+      const bar = `<div style="height:4px;background:#7B3CFF;border-radius:2px;margin-top:4px;width:${pct}%"></div>`;
       return `<tr>
-        <td style="padding:8px 12px;font-size:12px;color:#444;max-width:260px;word-break:break-all">${label}</td>
-        <td style="padding:8px 12px;text-align:right;font-weight:600;color:#7B3CFF">${count}</td>
+        <td style="padding:8px 12px;font-size:12px;color:#ccc;max-width:340px">${label}${bar}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:700;color:#7B3CFF;font-size:13px">${count}</td>
         <td style="padding:8px 12px;text-align:right;color:#888;font-size:12px">${pct}%</td>
       </tr>`;
     }).join('');
 
     body.innerHTML = `
-      <div style="margin-bottom:16px">
-        <div style="font-size:14px;font-weight:600;color:#eee;margin-bottom:12px">${subject}</div>
+      ${trackWarning}
+      <div style="margin-bottom:18px">
+        <div style="font-size:14px;font-weight:600;color:#eee;margin-bottom:14px">${subject}</div>
         <div style="display:flex;gap:12px;flex-wrap:wrap">
           <div class="stat-chip"><div class="stat-chip-val">${sentCount.toLocaleString()}</div><div class="stat-chip-label">발송</div></div>
           <div class="stat-chip open"><div class="stat-chip-val">${opens.toLocaleString()} <span style="font-size:12px;font-weight:400">(${openRate}%)</span></div><div class="stat-chip-label">👁 열람</div></div>
           <div class="stat-chip click"><div class="stat-chip-val">${clicks.toLocaleString()} <span style="font-size:12px;font-weight:400">(${clickRate}%)</span></div><div class="stat-chip-label">🖱 클릭</div></div>
+          <div class="stat-chip click"><div class="stat-chip-val">${totalClicks.toLocaleString()}</div><div class="stat-chip-label">총 클릭수</div></div>
         </div>
       </div>
       ${urlRows ? `
-      <div style="font-size:12px;color:#888;margin-bottom:8px">링크별 클릭</div>
-      <div style="overflow-y:auto;max-height:260px;border-radius:8px;border:1px solid #2a2a3a">
+      <div style="font-size:12px;color:#888;margin-bottom:8px;font-weight:600">링크별 클릭</div>
+      <div style="overflow-y:auto;max-height:320px;border-radius:8px;border:1px solid #2a2a3a">
         <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:#1a1a2e">
+          <thead><tr style="background:#1a1a2e;position:sticky;top:0">
             <th style="padding:8px 12px;text-align:left;font-size:11px;color:#888">링크</th>
             <th style="padding:8px 12px;text-align:right;font-size:11px;color:#888">클릭</th>
             <th style="padding:8px 12px;text-align:right;font-size:11px;color:#888">비율</th>
           </tr></thead>
           <tbody>${urlRows}</tbody>
         </table>
-      </div>` : '<div style="color:#888;font-size:13px">아직 클릭 데이터가 없습니다.</div>'}`;
+      </div>` : '<div style="color:#888;font-size:13px;padding:8px 0">아직 클릭 데이터가 없습니다.</div>'}`;
   } catch(e) {
     body.innerHTML = `<div style="color:#e24b4a">통계를 불러올 수 없습니다.</div>`;
   }
+}
+
+function downloadCampaignCsv(scheduleId, subject) {
+  window.open(`${API_BASE}/api/campaign-stats/${scheduleId}/csv`, '_blank');
 }
 
 async function openScheduleDetail(id) {
@@ -1669,7 +1733,17 @@ async function openScheduleDetail(id) {
 }
 
 function closeScheduleDetail() {
-  document.getElementById('schedule-detail-modal').style.display = 'none';
+  const modal = document.getElementById('schedule-detail-modal');
+  modal.style.display = 'none';
+  // 모달 크기·헤더·푸터 초기화 (캠페인 통계에서 변경했을 수 있음)
+  const modalBox = modal.querySelector('.modal-box');
+  const header   = modal.querySelector('.modal-header span');
+  const footer   = modal.querySelector('.modal-footer');
+  if(modalBox) modalBox.style.width = '';
+  if(header)   header.textContent = '발송 예약 상세';
+  if(footer) footer.innerHTML = `
+    <button class="btn-danger btn-sm" id="schedule-detail-cancel-btn">예약 취소</button>
+    <button class="btn-secondary btn-sm" onclick="closeScheduleDetail()">닫기</button>`;
 }
 
 async function cancelSchedule(id) {
@@ -1828,7 +1902,9 @@ function onSchTypeChange() {
 }
 
 async function sendNow(dryRun = false) {
-  const subject = document.getElementById('sch-subject').value.trim();
+  const isMarketing = document.querySelector('input[name="sch-mail-type"]:checked')?.value === 'marketing';
+  const rawSubject = document.getElementById('sch-subject').value.trim();
+  const subject = isMarketing && !rawSubject.startsWith('(광고)') ? `(광고) ${rawSubject}` : rawSubject;
   const segSel = document.getElementById('sch-segment');
   const segRaw = segSel.value || null;
   const isPreset = segRaw && segRaw.startsWith('__preset_');
@@ -1963,7 +2039,9 @@ async function saveSchedule() {
 
   if(!_schedTplId) return;
 
-  const subject = document.getElementById('sch-subject').value.trim();
+  const isMarketing = document.querySelector('input[name="sch-mail-type"]:checked')?.value === 'marketing';
+  const rawSubject = document.getElementById('sch-subject').value.trim();
+  const subject = isMarketing && !rawSubject.startsWith('(광고)') ? `(광고) ${rawSubject}` : rawSubject;
   if(!subject) { showToast('이메일 제목을 입력해주세요'); document.getElementById('sch-subject').focus(); return; }
 
   const payload = {
@@ -2453,6 +2531,7 @@ async function generateFromListPrompt() {
 async function generateSeasonPromotion() {
   const btn = document.getElementById('list-season-btn');
   btn.disabled = true; btn.textContent = '생성 중...';
+  showAILoading(['🗺️ 이달의 여행지 선정 중...', '🏨 호텔 데이터 조회 중...', '💰 차주 최저가 확인 중...', '✨ 이메일 템플릿 생성 중...']);
   try {
     const res = await fetch(API_BASE + '/api/ai/season-generate', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const data = await res.json();
@@ -2465,10 +2544,13 @@ async function generateSeasonPromotion() {
     document.getElementById('tpl-name-input').value = data.subject || '';
     showView('editor');
     render(); rp();
-    showToast('시즌 프로모션 템플릿 생성 완료! 호텔 이미지를 추가해주세요');
+    const sendCount = data.meta?.sendCount || 1;
+    const newDests = (data.meta?.newDestinations || []).join(', ');
+    showToast(`이번 달 ${sendCount}차 발송 템플릿 생성 완료!\n${newDests}`);
   } catch(e) {
     showToast('서버 연결 실패: ' + e.message);
   } finally {
+    hideAILoading();
     btn.disabled = false; btn.textContent = '🗓 시즌 프로모션 자동 생성';
   }
 }
@@ -2520,6 +2602,7 @@ async function generateTriggerMailFromList() {
 }
 
 async function _aiGenerateAndOpen(prompt) {
+  showAILoading(['💡 프롬프트 분석 중...', '✍️ 콘텐츠 생성 중...', '🎨 템플릿 구성 중...']);
   try {
     const res = await fetch(API_BASE + '/api/ai-generate', {
       method: 'POST',
@@ -2543,6 +2626,8 @@ async function _aiGenerateAndOpen(prompt) {
     showToast('AI 템플릿 생성 완료! 에디터에서 수정하세요');
   } catch(e) {
     showToast('서버 연결 실패: ' + e.message);
+  } finally {
+    hideAILoading();
   }
 }
 
@@ -2564,6 +2649,7 @@ async function aiGenerate() {
   const btn = document.getElementById('ai-generate-btn');
   btn.disabled = true;
   btn.textContent = '생성 중...';
+  showAILoading(['💡 프롬프트 분석 중...', '✍️ 콘텐츠 생성 중...', '🎨 템플릿 구성 중...']);
 
   try {
     const res = await fetch(API_BASE + '/api/ai-generate', {
@@ -2591,6 +2677,7 @@ async function aiGenerate() {
   } catch(e) {
     showToast('서버 연결 실패: ' + e.message);
   } finally {
+    hideAILoading();
     btn.disabled = false;
     btn.textContent = '✨ 생성';
   }
