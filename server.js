@@ -1,10 +1,10 @@
 require('dotenv').config();
 const express = require('express');
-const { createClient } = require('@clickhouse/client');
+const { createClient: createClickHouseClient } = require('@clickhouse/client');
 const cors = require('cors');
 const crypto = require('crypto');
 const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
-const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors({
@@ -25,14 +25,7 @@ const ses = new SESClient({
 });
 
 // ── Supabase ──
-const sb = createSupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
-// ── ClickHouse ──
-const clickhouse = createClient({
-  url: process.env.CLICKHOUSE_HOST,
-  username: process.env.CLICKHOUSE_USER,
-  password: process.env.CLICKHOUSE_PASSWORD,
-});
+const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // ── 수신거부 토큰 (unsubscribe.html과 동일한 시크릿) ──
 const UNSUB_SECRET = 'tripbtoz-unsub-2025';
@@ -45,6 +38,21 @@ function getUnsubUrl(email, scheduleId = null) {
   const base = process.env.UNSUB_BASE_URL || 'http://localhost:3000/unsubscribe.html';
   const sid = scheduleId ? `&sid=${scheduleId}` : '';
   return `${base}?e=${Buffer.from(email).toString('base64')}&t=${generateUnsubToken(email)}${sid}`;
+}
+
+// ── ClickHouse ──
+const ch = createClickHouseClient({
+  url:      process.env.CH_HOST     || 'https://nxof1ut3dh.ap-northeast-2.aws.clickhouse.cloud:8443',
+  username: process.env.CH_USER     || 'sanghyukl',
+  password: process.env.CH_PASSWORD || '',
+  request_timeout: 30000,
+});
+
+// ClickHouse SQL 값 이스케이프 (문자열 인젝션 방지)
+function chEscape(val) {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number') return String(val);
+  return `'${String(val).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
 const PRESET_SQLS = {
@@ -67,7 +75,7 @@ const PRESET_SQLS = {
       AND bo.email != ''`,
   all: `
     SELECT DISTINCT email FROM tripbtoz_users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
-    UNION ALL
+    UNION DISTINCT
     SELECT DISTINCT bo.email
     FROM tripbtoz_payment_checkout_detail cd
     JOIN tripbtoz_checkouts c ON c.id = cd.checkout_id
@@ -83,32 +91,14 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24시간
 const cache = {}; // { key: { rows, columns, total, cachedAt } }
 
 async function runQuery(sql) {
-  try {
-    const start = Date.now();
-    const result = await clickhouse.query({
-      query: sql,
-      format: 'JSONEachRow',
-    });
-    const rows = await result.json();
-    const elapsed = Date.now() - start;
-    
-    if(rows.length === 0) {
-      return { type: 'select', columns: [], rows: [], total: 0, elapsed };
-    }
-    
-    const columns = Object.keys(rows[0]);
-    const rowsArray = rows.map(r => columns.map(c => r[c]));
-    
-    return {
-      type: 'select',
-      columns,
-      rows: rowsArray,
-      total: rows.length,
-      elapsed,
-    };
-  } catch(err) {
-    throw err;
-  }
+  const start = Date.now();
+  const resultSet = await ch.query({ query: sql, format: 'JSONCompact' });
+  const data = await resultSet.json();
+  const elapsed = Date.now() - start;
+  if (!data.meta) return { type: 'ok', affectedRows: 0, elapsed };
+  const columns = data.meta.map(col => col.name);
+  const rows = data.data || [];
+  return { type: 'select', columns, rows, total: rows.length, elapsed };
 }
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -116,16 +106,15 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // 도시 검색 자동완성
 app.get('/api/cities', async (req, res) => {
   const q = (req.query.q || '').trim();
+  const like = chEscape(`%${q}%`);
   try {
-    const result = await clickhouse.query({
-      query: `SELECT DISTINCT city_kr FROM metatrip_hotel
-       WHERE (city_kr LIKE '%${q}%' OR city LIKE '%${q}%')
+    const result = await runQuery(
+      `SELECT DISTINCT city_kr FROM tripbtoz_hotels
+       WHERE (city_kr LIKE ${like} OR city LIKE ${like})
          AND city_kr IS NOT NULL AND city_kr != ''
-       ORDER BY city_kr LIMIT 20`,
-      format: 'JSONEachRow',
-    });
-    const rows = await result.json();
-    res.json(rows.map(r => r.city_kr));
+       ORDER BY city_kr LIMIT 20`
+    );
+    res.json((result.rows || []).map(r => r[0]));
   } catch(err) {
     res.status(400).json({ error: err.message });
   }
@@ -660,7 +649,7 @@ app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
   const hotelNames = {};
   if(hotelIds.length > 0) {
     try {
-      const sql = `SELECT hotel_id, name_kr FROM metatrip_hotel WHERE hotel_id IN (${hotelIds.map(id => `'${id}'`).join(',')})`;
+      const sql = `SELECT hotel_id, name_kr FROM tripbtoz_hotels WHERE hotel_id IN (${hotelIds.map(id => chEscape(id)).join(',')})`;
       const result = await runQuery(sql);
       if(result.type === 'select') {
         const idIdx   = result.columns.map(c => c.toLowerCase()).indexOf('hotel_id');
@@ -712,8 +701,8 @@ app.post('/api/hotels/smart-pick', async (req, res) => {
 
   const sql = `
     SELECT hotel_id, name_kr, city_kr, min_price
-    FROM metatrip_hotel
-    WHERE city_kr = '${city.replace(/'/g, "''")}'
+    FROM tripbtoz_hotels
+    WHERE city_kr = ${chEscape(city)}
       AND min_price IS NOT NULL AND min_price > 0
     ORDER BY min_price ASC
     LIMIT ${safeLimit}`;
@@ -980,18 +969,18 @@ app.post('/api/ai/season-generate', async (req, res) => {
     let whereClause;
     let fallbackWhereClause = null; // city 필터 결과 부족 시 country_code만으로 재시도
     if(dest.type === 'domestic') {
-      whereClause = `h.city_kr LIKE ${pool.escape('%' + dest.cityKeyword + '%')}`;
+      whereClause = `h.city_kr LIKE ${chEscape('%' + dest.cityKeyword + '%')}`;
     } else {
       // 국가코드 + 영문/한글 도시명 필터 (country_code만 쓰면 도쿄→오키나와 혼입 등 문제)
       const cityConditions = [];
-      if(dest.cityEn)      cityConditions.push(`h.city LIKE ${pool.escape('%' + dest.cityEn + '%')}`);
-      if(dest.cityKeyword) cityConditions.push(`h.city_kr LIKE ${pool.escape('%' + dest.cityKeyword + '%')}`);
+      if(dest.cityEn)      cityConditions.push(`h.city LIKE ${chEscape('%' + dest.cityEn + '%')}`);
+      if(dest.cityKeyword) cityConditions.push(`h.city_kr LIKE ${chEscape('%' + dest.cityKeyword + '%')}`);
       const cityFilter = cityConditions.length > 0 ? `(${cityConditions.join(' OR ')})` : null;
       whereClause = cityFilter
-        ? `h.country_code = ${pool.escape(dest.countryCode)} AND ${cityFilter}`
-        : `h.country_code = ${pool.escape(dest.countryCode)}`;
+        ? `h.country_code = ${chEscape(dest.countryCode)} AND ${cityFilter}`
+        : `h.country_code = ${chEscape(dest.countryCode)}`;
       // 발리/푸켓처럼 도시가 서브지역으로 분산된 경우 fallback
-      fallbackWhereClause = `h.country_code = ${pool.escape(dest.countryCode)}`;
+      fallbackWhereClause = `h.country_code = ${chEscape(dest.countryCode)}`;
     }
 
     const serverBase = process.env.SERVER_URL || 'http://localhost:3001';
@@ -1004,11 +993,11 @@ app.post('/api/ai/season-generate', async (req, res) => {
     while(result.length < 4) {
       const sql = `
         SELECT h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
-        FROM tripbtoz.hotels h
-        JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
-        LEFT JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
-        WHERE MONTH(b.check_in) = ${actualNextMonth}
-          AND YEAR(b.check_in) = ${lastYear}
+        FROM tripbtoz_hotels h
+        JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
+        LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
+        WHERE toMonth(b.check_in) = ${actualNextMonth}
+          AND toYear(b.check_in) = ${lastYear}
           AND ${whereClause}
         GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
         ORDER BY booking_cnt DESC
@@ -1069,11 +1058,11 @@ app.post('/api/ai/season-generate', async (req, res) => {
       while(result.length < 4) {
         const sql = `
           SELECT h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
-          FROM tripbtoz.hotels h
-          JOIN tripbtoz.bookings b ON b.hotel_id = h.hotel_id
-          LEFT JOIN tripbtoz_meta.accommodation_common ac ON ac.id = h.hotel_id
-          WHERE MONTH(b.check_in) = ${actualNextMonth}
-            AND YEAR(b.check_in) = ${lastYear}
+          FROM tripbtoz_hotels h
+          JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
+          LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
+          WHERE toMonth(b.check_in) = ${actualNextMonth}
+            AND toYear(b.check_in) = ${lastYear}
             AND ${fallbackWhereClause}
           GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
           ORDER BY booking_cnt DESC
@@ -1211,6 +1200,7 @@ ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4�
       meta: { yearMonth, usedBefore: usedDestinations, newDestinations: destinations.destinations.map(d => d.name), sendCount: Math.floor(usedCount / 4) + 1 },
     });
   } catch(e) {
+    console.error('[season-generate] 에러:', e);
     res.status(500).json({ error: e.message });
   }
 });

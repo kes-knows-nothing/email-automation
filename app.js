@@ -1640,7 +1640,7 @@ async function openCampaignStats(scheduleId, subject, sentCount) {
   try {
     const res  = await fetch(`${API_BASE}/api/campaign-stats/${scheduleId}`);
     const data = await res.json();
-    const { opens, clicks, totalClicks, urlStats, hotelNames } = data;
+    const { opens, clicks, totalClicks, urlStats, hotelNames, unsubscribes } = data;
     const openRate  = sentCount > 0 ? (opens  / sentCount * 100).toFixed(1) : 0;
     const clickRate = sentCount > 0 ? (clicks / sentCount * 100).toFixed(1) : 0;
 
@@ -1678,6 +1678,7 @@ async function openCampaignStats(scheduleId, subject, sentCount) {
           <div class="stat-chip open"><div class="stat-chip-val">${opens.toLocaleString()} <span style="font-size:12px;font-weight:400">(${openRate}%)</span></div><div class="stat-chip-label">👁 열람</div></div>
           <div class="stat-chip click"><div class="stat-chip-val">${clicks.toLocaleString()} <span style="font-size:12px;font-weight:400">(${clickRate}%)</span></div><div class="stat-chip-label">🖱 클릭</div></div>
           <div class="stat-chip click"><div class="stat-chip-val">${totalClicks.toLocaleString()}</div><div class="stat-chip-label">총 클릭수</div></div>
+          <div class="stat-chip" style="border-color:#3b1a1a"><div class="stat-chip-val" style="color:#f87171">${(unsubscribes||0).toLocaleString()}</div><div class="stat-chip-label">🚫 수신거부</div></div>
         </div>
       </div>
       ${urlRows ? `

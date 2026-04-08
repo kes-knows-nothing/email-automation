@@ -185,6 +185,7 @@ async function init() {
       email,
       unsubscribed_at: new Date().toISOString(),
       source_template: params.get('tpl') || null,
+      schedule_id: params.get('sid') || null,
     });
     if (error) {
       showError('처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
