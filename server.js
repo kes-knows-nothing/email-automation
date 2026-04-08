@@ -41,10 +41,12 @@ function getUnsubUrl(email, scheduleId = null) {
 }
 
 // ── ClickHouse ──
+const CH_PASSWORD = process.env.CH_PASSWORD || '';
+console.log(`[ClickHouse] user=${process.env.CH_USER}, password length=${CH_PASSWORD.length}, starts=${CH_PASSWORD.slice(0,5)}`);
 const ch = createClickHouseClient({
   url:      process.env.CH_HOST     || 'https://nxof1ut3dh.ap-northeast-2.aws.clickhouse.cloud:8443',
   username: process.env.CH_USER     || 'sanghyukl',
-  password: process.env.CH_PASSWORD || '',
+  password: CH_PASSWORD,
   request_timeout: 30000,
 });
 
@@ -64,27 +66,25 @@ const PRESET_SQLS = {
       AND email IS NOT NULL
       AND email != ''`,
   guest: `
-    SELECT DISTINCT bo.email
+    SELECT DISTINCT b.email
     FROM tripbtoz_payment_checkout_detail cd
     JOIN tripbtoz_checkouts c ON c.id = cd.checkout_id
-    JOIN tripbtoz_bookings b ON b.checkout_id = cd.checkout_id
-    JOIN tripbtoz_bookings_octopus bo ON bo.trxNum = b.booking_code
+    JOIN tripbtoz_booking_booking b ON b.checkout_id = cd.checkout_id
     WHERE cd.ad_policy_agreement_yn = 1
       AND c.user_type = 'guest'
-      AND bo.email IS NOT NULL
-      AND bo.email != ''`,
+      AND b.email IS NOT NULL
+      AND b.email != ''`,
   all: `
     SELECT DISTINCT email FROM tripbtoz_users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
     UNION DISTINCT
-    SELECT DISTINCT bo.email
+    SELECT DISTINCT b.email
     FROM tripbtoz_payment_checkout_detail cd
     JOIN tripbtoz_checkouts c ON c.id = cd.checkout_id
-    JOIN tripbtoz_bookings b ON b.checkout_id = cd.checkout_id
-    JOIN tripbtoz_bookings_octopus bo ON bo.trxNum = b.booking_code
+    JOIN tripbtoz_booking_booking b ON b.checkout_id = cd.checkout_id
     WHERE cd.ad_policy_agreement_yn = 1
       AND c.user_type = 'guest'
-      AND bo.email IS NOT NULL
-      AND bo.email != ''`,
+      AND b.email IS NOT NULL
+      AND b.email != ''`,
 };
 
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24시간
@@ -983,16 +983,20 @@ app.post('/api/ai/season-generate', async (req, res) => {
       fallbackWhereClause = `h.country_code = ${chEscape(dest.countryCode)}`;
     }
 
-    const serverBase = process.env.SERVER_URL || 'http://localhost:3001';
+    const PORT = process.env.PORT || 3001;
+    const serverBase = `http://localhost:${PORT}`;
     const { checkIn, checkOut } = getNextMondayDates();
     const seenIds = new Set();
-    const result = [];
+    const result = [];       // 가격 있는 호텔
+    const fallbackPool = []; // 가격 없는 호텔 (가격 있는 게 부족할 때 보조)
     let offset = 0;
-    const batchSize = 10;
+    const batchSize = 20;    // 한 번에 더 많이 조회
+    const maxBatches = 3;    // 최대 3배치(60개) 조회 후 중단
+    let batchCount = 0;
 
-    while(result.length < 4) {
+    while(result.length < 4 && batchCount < maxBatches) {
       const sql = `
-        SELECT h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
+        SELECT h.hotel_id AS hotel_id, h.name_kr AS name_kr, h.city_kr AS city_kr, h.address1 AS address1, h.address2 AS address2, h.country_code AS country_code, h.country_kr AS country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
         FROM tripbtoz_hotels h
         JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
         LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
@@ -1002,7 +1006,6 @@ app.post('/api/ai/season-generate', async (req, res) => {
         GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
         ORDER BY booking_cnt DESC
         LIMIT ${batchSize} OFFSET ${offset}`;
-
 
       let dbResult;
       try { dbResult = await runQuery(sql); } catch(_) { break; }
@@ -1037,27 +1040,31 @@ app.post('/api/ai/season-generate', async (req, res) => {
       // 가격 API 병렬 조회
       await Promise.all(batch.map(async h => {
         try {
-          const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(6000) }).then(r => r.json());
+          const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) }).then(r => r.json());
           if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
         } catch(_) {}
       }));
 
       const priced = batch.filter(h => h.price_available);
+      console.log(`[season][${dest.name}] DB조회 ${dbResult.rows.length}개 → 가격있음 ${priced.length}개 (배치 ${batchCount+1}/${maxBatches})`);
       result.push(...priced);
+      // 가격 없는 호텔도 fallback용으로 보관 (썸네일 있는 것 우선)
+      fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
 
-      // 결과가 충분하거나 더 이상 DB에 없으면 종료
       if(dbResult.rows.length < batchSize) break;
       offset += batchSize;
+      batchCount++;
     }
 
     // 도시 필터로 4개 못 채운 경우 (발리/푸켓 등 서브지역 분산 목적지) → country fallback
+    // country fallback (발리/푸켓 등 도시명이 서브지역으로 분산된 경우)
     if(result.length < 4 && fallbackWhereClause && fallbackWhereClause !== whereClause) {
       console.log(`[season] ${dest.name}: city 필터로 ${result.length}개만 확보, country fallback 시도`);
-      const fallbackOffset = 0;
       let fbOffset = 0;
-      while(result.length < 4) {
+      let fbBatch = 0;
+      while(result.length < 4 && fbBatch < maxBatches) {
         const sql = `
-          SELECT h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
+          SELECT h.hotel_id AS hotel_id, h.name_kr AS name_kr, h.city_kr AS city_kr, h.address1 AS address1, h.address2 AS address2, h.country_code AS country_code, h.country_kr AS country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
           FROM tripbtoz_hotels h
           JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
           LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
@@ -1085,13 +1092,25 @@ app.post('/api/ai/season-generate', async (req, res) => {
         batch.forEach(h => seenIds.add(h.hotel_id));
         await Promise.all(batch.map(async h => {
           try {
-            const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(6000) }).then(r => r.json());
+            const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) }).then(r => r.json());
             if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
           } catch(_) {}
         }));
         result.push(...batch.filter(h => h.price_available));
+        fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
         if(fbResult.rows.length < batchSize) break;
         fbOffset += batchSize;
+        fbBatch++;
+      }
+    }
+
+    // 가격 있는 호텔 4개 못 채운 경우: 가격 없는 호텔로 보충 (이름+썸네일은 있음)
+    if(result.length < 4) {
+      const needed = 4 - result.length;
+      const extras = fallbackPool.slice(0, needed);
+      if(extras.length > 0) {
+        console.log(`[season][${dest.name}] 가격 없는 호텔 ${extras.length}개로 보충`);
+        result.push(...extras);
       }
     }
 
@@ -1133,8 +1152,35 @@ app.post('/api/ai/season-generate', async (req, res) => {
   }
 
   try {
-    // Step 1. 이번 달 이미 발송한 여행지 조회
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const seasonTag = `[시즌] ${yearMonth}`;
+
+    // Step 0. 이번 달 생성된 시즌 템플릿 중 미발송 있으면 재사용
+    const { data: existingTpls } = await sb.from('templates')
+      .select('id, name, blocks')
+      .like('name', `${seasonTag}%`)
+      .order('created_at', { ascending: false });
+
+    if (existingTpls && existingTpls.length > 0) {
+      for (const tpl of existingTpls) {
+        const { data: schedules } = await sb.from('email_schedules')
+          .select('id, status')
+          .eq('template_id', tpl.id)
+          .in('status', ['pending', 'sent', 'failed'])
+          .limit(1);
+        if (!schedules || schedules.length === 0) {
+          // 발송 예약/완료 없음 → 기존 템플릿 재사용
+          console.log(`[season] 기존 미발송 템플릿 재사용: ${tpl.name}`);
+          return res.json({
+            subject: tpl.name,
+            blocks: tpl.blocks,
+            meta: { yearMonth, reused: true, templateId: tpl.id },
+          });
+        }
+      }
+    }
+
+    // Step 1. 이번 달 이미 발송한 여행지 조회
     const { data: historyRows } = await sb
       .from('season_destination_history')
       .select('destination_name')
@@ -1193,11 +1239,22 @@ ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4�
     }));
     await sb.from('season_destination_history').insert(toInsert);
 
-    const usedCount = usedDestinations.length;
-    res.json({
-      subject: destinations.subject || `${monthName} 인기 여행지 호텔 특가`,
+    // Step 6. 생성된 템플릿 자동 저장 (다음 접근 시 재사용 가능하도록)
+    const sendNum = (existingTpls ? existingTpls.length : 0) + 1;
+    const autoSubject = destinations.subject || `${monthName} 인기 여행지 호텔 특가`;
+    const autoTplName = `${seasonTag} (${sendNum}차) ${autoSubject}`;
+    const { data: savedTpl } = await sb.from('templates').insert({
+      name: autoTplName,
       blocks,
-      meta: { yearMonth, usedBefore: usedDestinations, newDestinations: destinations.destinations.map(d => d.name), sendCount: Math.floor(usedCount / 4) + 1 },
+      updated_at: new Date().toISOString(),
+    }).select('id').single();
+
+    console.log(`[season] 템플릿 자동 저장: "${autoTplName}" (id: ${savedTpl?.id})`);
+
+    res.json({
+      subject: autoSubject,
+      blocks,
+      meta: { yearMonth, usedBefore: usedDestinations, newDestinations: destinations.destinations.map(d => d.name), sendCount: sendNum, templateId: savedTpl?.id },
     });
   } catch(e) {
     console.error('[season-generate] 에러:', e);
