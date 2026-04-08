@@ -1,10 +1,10 @@
 require('dotenv').config();
 const express = require('express');
-const mysql = require('mysql2/promise');
+const { createClient } = require('@clickhouse/client');
 const cors = require('cors');
 const crypto = require('crypto');
 const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
-const { createClient } = require('@supabase/supabase-js');
+const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors({
@@ -25,7 +25,14 @@ const ses = new SESClient({
 });
 
 // ── Supabase ──
-const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const sb = createSupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// ── ClickHouse ──
+const clickhouse = createClient({
+  url: process.env.CLICKHOUSE_HOST,
+  username: process.env.CLICKHOUSE_USER,
+  password: process.env.CLICKHOUSE_PASSWORD,
+});
 
 // ── 수신거부 토큰 (unsubscribe.html과 동일한 시크릿) ──
 const UNSUB_SECRET = 'tripbtoz-unsub-2025';
@@ -34,51 +41,38 @@ function generateUnsubToken(email) {
     .update(email.toLowerCase().trim())
     .digest('base64url');
 }
-function getUnsubUrl(email) {
+function getUnsubUrl(email, scheduleId = null) {
   const base = process.env.UNSUB_BASE_URL || 'http://localhost:3000/unsubscribe.html';
-  return `${base}?e=${Buffer.from(email).toString('base64')}&t=${generateUnsubToken(email)}`;
+  const sid = scheduleId ? `&sid=${scheduleId}` : '';
+  return `${base}?e=${Buffer.from(email).toString('base64')}&t=${generateUnsubToken(email)}${sid}`;
 }
-
-const DB = {
-  host: '127.0.0.1',
-  port: 40007,
-  user: 'querypie',
-  password: '30ff83588736c56a',
-  database: 'tripbtoz',
-  connectTimeout: 10000,
-  waitForConnections: true,
-  connectionLimit: 5,
-  queueLimit: 0,
-};
-
-const pool = mysql.createPool(DB);
 
 const PRESET_SQLS = {
   member: `
     SELECT DISTINCT email
-    FROM tripbtoz.users_0519
+    FROM tripbtoz_users_0519
     WHERE mkt_email_agree = 1
       AND status = 'AT'
       AND email IS NOT NULL
       AND email != ''`,
   guest: `
     SELECT DISTINCT bo.email
-    FROM tripbtoz_payment.checkout_detail cd
-    JOIN tripbtoz.checkouts c ON c.id = cd.checkout_id
-    JOIN tripbtoz.bookings b ON b.checkout_id = cd.checkout_id
-    JOIN tripbtoz.bookings_octopus bo ON bo.trxNum = b.booking_code
+    FROM tripbtoz_payment_checkout_detail cd
+    JOIN tripbtoz_checkouts c ON c.id = cd.checkout_id
+    JOIN tripbtoz_bookings b ON b.checkout_id = cd.checkout_id
+    JOIN tripbtoz_bookings_octopus bo ON bo.trxNum = b.booking_code
     WHERE cd.ad_policy_agreement_yn = 1
       AND c.user_type = 'guest'
       AND bo.email IS NOT NULL
       AND bo.email != ''`,
   all: `
-    SELECT DISTINCT email FROM tripbtoz.users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
-    UNION
+    SELECT DISTINCT email FROM tripbtoz_users_0519 WHERE mkt_email_agree = 1 AND status = 'AT' AND email IS NOT NULL AND email != ''
+    UNION ALL
     SELECT DISTINCT bo.email
-    FROM tripbtoz_payment.checkout_detail cd
-    JOIN tripbtoz.checkouts c ON c.id = cd.checkout_id
-    JOIN tripbtoz.bookings b ON b.checkout_id = cd.checkout_id
-    JOIN tripbtoz.bookings_octopus bo ON bo.trxNum = b.booking_code
+    FROM tripbtoz_payment_checkout_detail cd
+    JOIN tripbtoz_checkouts c ON c.id = cd.checkout_id
+    JOIN tripbtoz_bookings b ON b.checkout_id = cd.checkout_id
+    JOIN tripbtoz_bookings_octopus bo ON bo.trxNum = b.booking_code
     WHERE cd.ad_policy_agreement_yn = 1
       AND c.user_type = 'guest'
       AND bo.email IS NOT NULL
@@ -89,21 +83,31 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24시간
 const cache = {}; // { key: { rows, columns, total, cachedAt } }
 
 async function runQuery(sql) {
-  const conn = await pool.getConnection();
   try {
     const start = Date.now();
-    const [rows, fields] = await conn.query(sql);
+    const result = await clickhouse.query({
+      query: sql,
+      format: 'JSONEachRow',
+    });
+    const rows = await result.json();
     const elapsed = Date.now() - start;
-    if(!fields) return { type: 'ok', affectedRows: rows.affectedRows, elapsed };
+    
+    if(rows.length === 0) {
+      return { type: 'select', columns: [], rows: [], total: 0, elapsed };
+    }
+    
+    const columns = Object.keys(rows[0]);
+    const rowsArray = rows.map(r => columns.map(c => r[c]));
+    
     return {
       type: 'select',
-      columns: fields.map(f => f.name),
-      rows: rows.map(r => fields.map(f => r[f.name])),
+      columns,
+      rows: rowsArray,
       total: rows.length,
       elapsed,
     };
-  } finally {
-    conn.release();
+  } catch(err) {
+    throw err;
   }
 }
 
@@ -112,20 +116,18 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // 도시 검색 자동완성
 app.get('/api/cities', async (req, res) => {
   const q = (req.query.q || '').trim();
-  const conn = await pool.getConnection();
   try {
-    const [rows] = await conn.execute(
-      `SELECT DISTINCT city_kr FROM hotels
-       WHERE (city_kr LIKE ? OR city LIKE ?)
+    const result = await clickhouse.query({
+      query: `SELECT DISTINCT city_kr FROM metatrip_hotel
+       WHERE (city_kr LIKE '%${q}%' OR city LIKE '%${q}%')
          AND city_kr IS NOT NULL AND city_kr != ''
        ORDER BY city_kr LIMIT 20`,
-      [`%${q}%`, `%${q}%`]
-    );
+      format: 'JSONEachRow',
+    });
+    const rows = await result.json();
     res.json(rows.map(r => r.city_kr));
   } catch(err) {
     res.status(400).json({ error: err.message });
-  } finally {
-    conn.release();
   }
 });
 
@@ -403,7 +405,7 @@ async function executeSend(jobId, { templateId, segmentId, segmentQuery, presetK
       for(const [k, v] of Object.entries(dynVars)) {
         html = html.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
       }
-      const unsubUrl = getUnsubUrl(email);
+      const unsubUrl = getUnsubUrl(email, scheduleId);
       const sendDate = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
       html = html.replace(/\{\{UNSUB_URL\}\}/g, unsubUrl)
                  .replace(/#\{UNSUBSCRIBE_URL\}/g, unsubUrl)
@@ -628,9 +630,10 @@ app.get('/track/click', async (req, res) => {
 // 캠페인 통계 조회
 app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
   const { scheduleId } = req.params;
-  const { data, error } = await sb.from('email_events')
-    .select('event_type, url, email_hash, created_at')
-    .eq('schedule_id', scheduleId);
+  const [{ data, error }, { count: unsubCount }] = await Promise.all([
+    sb.from('email_events').select('event_type, url, email_hash, created_at').eq('schedule_id', scheduleId),
+    sb.from('unsubscribers').select('*', { count: 'exact', head: true }).eq('schedule_id', scheduleId),
+  ]);
   if(error) return res.status(400).json({ error: error.message });
 
   const openEvents  = data.filter(e => e.event_type === 'open');
@@ -657,7 +660,7 @@ app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
   const hotelNames = {};
   if(hotelIds.length > 0) {
     try {
-      const sql = `SELECT hotel_id, name_kr FROM tripbtoz.hotels WHERE hotel_id IN (${hotelIds.map(id => pool.escape(id)).join(',')})`;
+      const sql = `SELECT hotel_id, name_kr FROM metatrip_hotel WHERE hotel_id IN (${hotelIds.map(id => `'${id}'`).join(',')})`;
       const result = await runQuery(sql);
       if(result.type === 'select') {
         const idIdx   = result.columns.map(c => c.toLowerCase()).indexOf('hotel_id');
@@ -667,7 +670,7 @@ app.get('/api/campaign-stats/:scheduleId', async (req, res) => {
     } catch(_) {}
   }
 
-  res.json({ opens, clicks, totalClicks, urlStats, hotelNames });
+  res.json({ opens, clicks, totalClicks, urlStats, hotelNames, unsubscribes: unsubCount || 0 });
 });
 
 // 캠페인 통계 CSV 다운로드
@@ -709,8 +712,8 @@ app.post('/api/hotels/smart-pick', async (req, res) => {
 
   const sql = `
     SELECT hotel_id, name_kr, city_kr, min_price
-    FROM tripbtoz.hotels
-    WHERE city_kr = ${pool.escape(city)}
+    FROM metatrip_hotel
+    WHERE city_kr = '${city.replace(/'/g, "''")}'
       AND min_price IS NOT NULL AND min_price > 0
     ORDER BY min_price ASC
     LIMIT ${safeLimit}`;
