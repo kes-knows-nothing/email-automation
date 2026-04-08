@@ -2623,8 +2623,21 @@ ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4�
     const hotelData = await hotelRes.json();
     if(hotelData.error) throw new Error(hotelData.error);
 
-    // Step 4. 블록 조립 (대체 도시 반영)
+    // Step 3-1. 대체 도시가 있으면 LLM으로 설명 생성
     const actualDests = hotelData.resolvedDestinations || destinations.destinations;
+    const replacedDests = actualDests.filter(d => d.replaced);
+    if(replacedDests.length > 0) {
+      const descResult = await callLLM(`다음 여행지들에 대해 이메일 마케팅용 소개 문구를 3~4문장으로 작성해주세요.
+계절감(${monthName}), 추천 활동, 분위기를 담아 독자가 여행을 상상할 수 있게 작성하세요.
+
+다음 JSON 형식으로만 응답하세요:
+{ "descriptions": { "도시명": "3~4문장 설명" } }
+
+여행지 목록: ${replacedDests.map(d => d.name).join(', ')}`, 1024);
+      replacedDests.forEach(d => {
+        if(descResult?.descriptions?.[d.name]) d.description = descResult.descriptions[d.name];
+      });
+    }
     const newBlocks = [{ type: 'logo', data: {} }];
     newBlocks.push({ type: 'title', data: { text: destinations.titleText || `${monthName} 추천 여행지` } });
     newBlocks.push({ type: 'text',  data: { text: destinations.introText || '' } });

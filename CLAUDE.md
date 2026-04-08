@@ -156,28 +156,58 @@ CH_PASSWORD=...
 
 가장 복잡한 기능. 버튼 클릭 1번으로 완성된 이메일 생성.
 
+**핵심 정책: 미발송 템플릿 재사용**
+- 이번 달 생성된 시즌 템플릿이 아직 발송 예약/완료되지 않았으면 재사용 (LLM 호출 없음)
+- 발송 예약(pending) 또는 발송 완료(sent)인 경우에만 새로운 여행지 생성
+- 월 중 여러 번 발송할 때 자동으로 차수 관리 (1차, 2차...)
+
+**호텔 조회 규칙**
+- 여행지별 최소 4개 호텔 필수 (가격 있는 호텔만 포함)
+- 가격 없는 호텔은 완전 제외
+- 4개 미만이면 대체 도시 자동 탐색 (ClickHouse 예약건 많은 순)
+- 국내 도시는 시(市) 단위만 허용 — 구·군·동·로 단위 제외 (예: 강남구 ❌, 서울 ✅)
+- 여행지 설명: 3~4문장 (계절감, 추천 활동, 분위기 포함)
+- 대체 도시 설명은 LLM으로 별도 생성
+
+**LLM 호출 구조 (사내망 필요)**
+- LLM 호출은 프론트엔드(브라우저)에서 직접 `llm-gateway.tbz.kr` 호출
+- 백엔드(Railway)는 ClickHouse 조회 + 가격 API + 이메일 발송만 담당
+- Railway에서 LLM Gateway 접근 불가 (사내망 전용)
+
 ```
-1. Supabase 조회: 이번 달 이미 발송한 여행지 목록 조회 (season_destination_history)
+[Step 0] Supabase 조회: 이번 달 "[시즌] YYYY-MM%" 패턴 템플릿 검색
+  → 미발송(email_schedules에 pending/sent 없음) 템플릿 있으면 즉시 반환 (재사용)
+  → 모두 발송됐거나 없으면 아래 단계 진행
 
-2. LLM Gateway 호출 (llm-gateway.tbz.kr) ← VPN 필요
-   → 다음 달에 가기 좋은 여행지 국내2 + 해외2 선정
-   → 여행지별 3~4줄 설명 텍스트 생성
-   → 이미 발송한 여행지는 제외 (중복 방지)
+[Step 1] Supabase 조회: season_destination_history에서 이번 달 사용한 여행지 조회
+  → LLM 프롬프트에 제외 목록으로 전달
 
-3. ClickHouse 조회: 여행지별 예약건수 상위 호텔 조회
-   - tripbtoz_hotels + tripbtoz_bookings JOIN
-   - tripbtoz_meta_accommodation_common 에서 썸네일
-   - 작년 같은 달 기준 예약건수 ORDER BY
+[Step 2] 프론트 LLM 호출 (llm-gateway.tbz.kr, 사내망 직접)
+  → 다음 달에 가기 좋은 여행지 국내2 + 해외2 선정
+  → 여행지별 3~4문장 설명 생성
+  → 이미 발송한 여행지는 제외 (중복 방지)
 
-4. 트립비토즈 API: 각 호텔 차주 최저가 조회 (병렬)
-   - 가격 없으면 해당 호텔 제외
+[Step 3] POST /api/hotels/season-hotels (Railway)
+  → ClickHouse: 여행지별 예약건수 상위 호텔 조회 (작년 같은 달 기준)
+  → 트립비토즈 API: 각 호텔 차주 최저가 조회 (병렬, 가격 없으면 제외)
+  → 호텔 4개 미만이면 자동 대체 도시 탐색 (findReplacementCity)
+    - 국내: country_code=KR, 구·군·동·로 단위 제외
+    - 해외: country_code≠KR
+  → resolvedDestinations 반환 (대체된 도시 포함)
 
-5. 블록 조립: logo + title + text + [subtitle+text+hotels] × 4 + footer(marketing)
+[Step 3-1] 대체 도시 있으면 프론트 LLM 재호출 → 설명 생성
 
-6. Supabase 저장: 이번 발송 여행지 season_destination_history에 기록
+[Step 4] 블록 조립: logo + title + text + [subtitle+text+hotels] × 4 + footer(marketing)
 
-7. 반환: 완성된 blocks JSON → 에디터에서 바로 편집 가능
+[Step 5] Supabase 저장:
+  - season_destination_history에 실제 사용된 여행지 기록
+  - templates 테이블에 자동 저장 (이름: "[시즌] YYYY-MM (N차) 제목")
+  → 다음 클릭 시 Step 0에서 이 템플릿을 재사용
+
+[Step 6] 에디터 오픈: 완성된 blocks → 에디터에서 바로 편집 가능
 ```
+
+**템플릿 이름 패턴**: `[시즌] 2026-04 (1차) 4월 인기 여행지 호텔 특가`
 
 ---
 

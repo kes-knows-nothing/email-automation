@@ -375,10 +375,11 @@ async function findReplacementCity(type, excludeKeywords) {
   const actualNextMonth = ((now.getMonth() + 1) % 12) + 1;
   const lastYear = now.getFullYear() - 1;
   const whereClause = type === 'domestic'
-    ? `h.country_code = 'KR'`
+    ? `h.country_code = 'KR'
+      AND NOT match(h.city_kr, '[구군동로]$')`   // 구·군·동·로 단위 제외, 시 단위만
     : `h.country_code != 'KR' AND h.country_code != ''`;
 
-  // 예약건 많은 상위 20개 도시 조회
+  // 예약건 많은 상위 도시 조회
   const sql = `
     SELECT h.city_kr AS city_kr, h.country_code AS country_code, COUNT(*) AS cnt
     FROM tripbtoz_hotels h
