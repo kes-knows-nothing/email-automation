@@ -11,20 +11,29 @@ const API_BASE = location.hostname === 'localhost' || location.hostname === '127
 const LLM_GATEWAY_URL = 'https://llm-gateway.tbz.kr';
 const LLM_GATEWAY_API_KEY = 'llm_A13p7hpAJuXqiBAaNrFjKOgw-rBTyh-G';
 
-async function callLLM(systemPrompt, maxTokens = 1024) {
-  const r = await fetch(`${LLM_GATEWAY_URL}/v1/proxy/bedrock/converse`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Api-Key': LLM_GATEWAY_API_KEY },
-    body: JSON.stringify({
-      modelId: 'apac.anthropic.claude-sonnet-4-20250514-v1:0',
-      system: [{ text: systemPrompt }],
-      messages: [{ role: 'user', content: [{ text: 'JSON만 출력해주세요.' }] }],
-      inferenceConfig: { maxTokens },
-    }),
-  });
-  const d = await r.json();
-  const text = d.output?.message?.content?.[0]?.text || '';
-  return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+async function callLLM(systemPrompt, maxTokens = 1024, retries = 3) {
+  for(let attempt = 1; attempt <= retries; attempt++) {
+    const r = await fetch(`${LLM_GATEWAY_URL}/v1/proxy/bedrock/converse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': LLM_GATEWAY_API_KEY },
+      body: JSON.stringify({
+        modelId: 'apac.anthropic.claude-sonnet-4-20250514-v1:0',
+        system: [{ text: systemPrompt }],
+        messages: [{ role: 'user', content: [{ text: 'JSON만 출력해주세요.' }] }],
+        inferenceConfig: { maxTokens },
+      }),
+    });
+    if(r.status === 429) {
+      if(attempt === retries) throw new Error('LLM 요청 한도 초과 (429). 잠시 후 다시 시도해주세요.');
+      const delay = attempt * 5000; // 5초, 10초 간격으로 재시도
+      console.log(`[LLM] 429 요청 제한, ${delay/1000}초 후 재시도 (${attempt}/${retries})`);
+      await new Promise(res => setTimeout(res, delay));
+      continue;
+    }
+    const d = await r.json();
+    const text = d.output?.message?.content?.[0]?.text || '';
+    return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+  }
 }
 
 // ═══════════════════════════════════════════
