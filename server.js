@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
 const { createClient } = require('@supabase/supabase-js');
 
+const path = require('path');
+
 const app = express();
 app.use(cors({
   origin: '*',
@@ -14,6 +16,9 @@ app.use(cors({
 }));
 app.options('*', cors());
 app.use(express.json());
+
+// 정적 파일 서빙 (프론트엔드)
+app.use(express.static(path.join(__dirname)));
 
 // ── SES ──
 const ses = new SESClient({

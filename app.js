@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════
 // API BASE URL
 // ═══════════════════════════════════════════
-const API_BASE = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
-  ? 'http://localhost:3001'
-  : 'https://email-automation-production-7cba.up.railway.app';
+// 프론트·백엔드 동일 서버 (Node.js 20 통합)
+// 로컬 개발 시 포트 3001에서 프론트도 함께 서빙됨
+const API_BASE = '';
 
 // ═══════════════════════════════════════════
 // LLM GATEWAY (사내망 직접 호출)
@@ -2823,8 +2823,7 @@ async function aiGenerate() {
 let triggerMappings = [];
 let editingTriggerId = null;
 
-const TRIGGER_BASE = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
-  ? 'http://localhost:3001' : 'https://email-automation-production-7cba.up.railway.app';
+const TRIGGER_BASE = '';
 
 let _triggerSecretValue = null;
 let _secretVisible = false;
