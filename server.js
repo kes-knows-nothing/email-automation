@@ -229,7 +229,6 @@ async function getHotelsForCity(dest) {
   const { checkIn, checkOut } = getNextMondayDates();
   const seenIds = new Set();
   const result = [];
-  const fallbackPool = [];
   let offset = 0;
   const batchSize = 20;
   const maxBatches = 3;
@@ -288,7 +287,6 @@ async function getHotelsForCity(dest) {
     const priced = batch.filter(h => h.price_available);
     console.log(`[season][${dest.name}] DB조회 ${dbResult.rows.length}개 → 가격있음 ${priced.length}개 (배치 ${batchCount+1}/${maxBatches})`);
     result.push(...priced);
-    fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
 
     if(dbResult.rows.length < batchSize) break;
     offset += batchSize;
@@ -335,21 +333,12 @@ async function getHotelsForCity(dest) {
         } catch(_) {}
       }));
       result.push(...batch.filter(h => h.price_available));
-      fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
-      if(fbResult.rows.length < batchSize) break;
+        if(fbResult.rows.length < batchSize) break;
       fbOffset += batchSize;
       fbBatch++;
     }
   }
 
-  // 가격 없는 호텔로 보충
-  if(result.length < 4) {
-    const extras = fallbackPool.slice(0, 4 - result.length);
-    if(extras.length > 0) {
-      console.log(`[season][${dest.name}] 가격 없는 호텔 ${extras.length}개로 보충`);
-      result.push(...extras);
-    }
-  }
 
   function toFlagEmoji(code) {
     if (!code || code.length !== 2) return '';
