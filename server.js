@@ -369,6 +369,57 @@ async function getHotelsForCity(dest) {
   }));
 }
 
+// 호텔 데이터 없는 여행지 → 대체 도시 자동 탐색
+async function findReplacementCity(type, excludeKeywords) {
+  const now = new Date();
+  const actualNextMonth = ((now.getMonth() + 1) % 12) + 1;
+  const lastYear = now.getFullYear() - 1;
+  const whereClause = type === 'domestic'
+    ? `h.country_code = 'KR'`
+    : `h.country_code != 'KR' AND h.country_code != ''`;
+
+  // 예약건 많은 상위 20개 도시 조회
+  const sql = `
+    SELECT h.city_kr AS city_kr, h.country_code AS country_code, COUNT(*) AS cnt
+    FROM tripbtoz_hotels h
+    JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
+    WHERE toMonth(b.check_in) = ${actualNextMonth}
+      AND toYear(b.check_in) = ${lastYear}
+      AND ${whereClause}
+      AND h.city_kr != ''
+      AND h.city_kr NOT LIKE '%[%'
+    GROUP BY h.city_kr, h.country_code
+    ORDER BY cnt DESC
+    LIMIT 20`;
+
+  let dbResult;
+  try { dbResult = await runQuery(sql); } catch(_) { return null; }
+  if(dbResult.type !== 'select' || !dbResult.rows.length) return null;
+
+  const cols = dbResult.columns.map(c => c.toLowerCase());
+  const cityIdx  = cols.indexOf('city_kr');
+  const codeIdx  = cols.indexOf('country_code');
+
+  for(const row of dbResult.rows) {
+    const cityName    = row[cityIdx];
+    const countryCode = row[codeIdx];
+    if(!cityName) continue;
+    // 이미 선정된 여행지 제외
+    if(excludeKeywords.some(kw => kw && cityName.includes(kw))) continue;
+
+    const dest = type === 'domestic'
+      ? { type: 'domestic', name: cityName, cityKeyword: cityName }
+      : { type: 'international', name: cityName, cityKeyword: cityName, countryCode, cityEn: cityName };
+
+    const hotels = await getHotelsForCity(dest);
+    if(hotels.length > 0) {
+      console.log(`[season] 대체 도시 발견: ${cityName} (${hotels.length}개 호텔)`);
+      return { cityName, countryCode, hotels };
+    }
+  }
+  return null;
+}
+
 function buildHotelUrl(h, utmCampaign) {
   const base = 'https://www.tripbtoz.com/hotels';
   const { checkIn, checkOut } = getNextMondayDates();
@@ -1117,8 +1168,33 @@ app.post('/api/hotels/season-hotels', async (req, res) => {
 
   try {
     const hotelsByDest = await Promise.all(destinations.map(d => getHotelsForCity(d)));
-    // destination history 저장
-    const toInsert = destinations.map(d => ({
+
+    // 호텔 없는 여행지 → 대체 도시 자동 탐색
+    const resolvedDestinations = [...destinations];
+    const usedKeywords = destinations.map(d => d.cityKeyword).filter(Boolean);
+
+    for(let i = 0; i < hotelsByDest.length; i++) {
+      if(hotelsByDest[i].length === 0) {
+        console.log(`[season] ${destinations[i].name}: 호텔 없음, 대체 도시 탐색 중...`);
+        const replacement = await findReplacementCity(destinations[i].type, usedKeywords);
+        if(replacement) {
+          hotelsByDest[i] = replacement.hotels;
+          resolvedDestinations[i] = {
+            ...destinations[i],
+            name: replacement.cityName,
+            cityKeyword: replacement.cityName,
+            countryCode: replacement.countryCode || destinations[i].countryCode,
+            description: `${replacement.cityName}의 인기 호텔을 소개합니다. 합리적인 가격과 뛰어난 접근성으로 많은 여행자들이 찾는 곳입니다.`,
+            replaced: true,
+            originalName: destinations[i].name,
+          };
+          usedKeywords.push(replacement.cityName);
+        }
+      }
+    }
+
+    // destination history 저장 (실제 사용된 여행지 기준)
+    const toInsert = resolvedDestinations.map(d => ({
       year_month: yearMonth,
       destination_name: d.name,
       destination_type: d.type,
@@ -1127,9 +1203,10 @@ app.post('/api/hotels/season-hotels', async (req, res) => {
       city_en: d.cityEn || null,
     }));
     await sb.from('season_destination_history').insert(toInsert);
+
     const result = {};
-    destinations.forEach((d, i) => { result[d.name] = hotelsByDest[i]; });
-    res.json({ hotels: result });
+    resolvedDestinations.forEach((d, i) => { result[d.name] = hotelsByDest[i]; });
+    res.json({ hotels: result, resolvedDestinations });
   } catch(e) {
     console.error('[season-hotels] 에러:', e);
     res.status(500).json({ error: e.message });

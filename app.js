@@ -2623,11 +2623,12 @@ ${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4�
     const hotelData = await hotelRes.json();
     if(hotelData.error) throw new Error(hotelData.error);
 
-    // Step 4. 블록 조립
+    // Step 4. 블록 조립 (대체 도시 반영)
+    const actualDests = hotelData.resolvedDestinations || destinations.destinations;
     const newBlocks = [{ type: 'logo', data: {} }];
     newBlocks.push({ type: 'title', data: { text: destinations.titleText || `${monthName} 추천 여행지` } });
     newBlocks.push({ type: 'text',  data: { text: destinations.introText || '' } });
-    destinations.destinations.forEach(dest => {
+    actualDests.forEach(dest => {
       const flag = dest.type === 'domestic' ? '🇰🇷' : '✈️';
       newBlocks.push({ type: 'subtitle', data: { text: `${flag} ${dest.name}`, size: 'medium' } });
       newBlocks.push({ type: 'text',     data: { text: dest.description || '' } });
