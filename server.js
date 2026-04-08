@@ -387,10 +387,11 @@ async function findReplacementCity(type, excludeKeywords) {
       AND toYear(b.check_in) = ${lastYear}
       AND ${whereClause}
       AND h.city_kr != ''
-      AND h.city_kr NOT LIKE '%[%'
+      AND NOT match(h.city_kr, '^[A-Z]{2,4}$')
+      AND length(h.city_kr) >= 2
     GROUP BY h.city_kr, h.country_code
     ORDER BY cnt DESC
-    LIMIT 20`;
+    LIMIT 30`;
 
   let dbResult;
   try { dbResult = await runQuery(sql); } catch(_) { return null; }
