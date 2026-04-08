@@ -203,6 +203,183 @@ function getNextMondayDates() {
   return { checkIn: fmt(ci), checkOut: fmt(co) };
 }
 
+// 여행지별 호텔 조회 (ClickHouse + 가격 API)
+async function getHotelsForCity(dest) {
+  const now = new Date();
+  const actualNextMonth = ((now.getMonth() + 1) % 12) + 1; // 다음달 1-based
+  const lastYear = now.getFullYear() - 1;
+
+  let whereClause;
+  let fallbackWhereClause = null;
+  if(dest.type === 'domestic') {
+    whereClause = `h.city_kr LIKE ${chEscape('%' + dest.cityKeyword + '%')}`;
+  } else {
+    const cityConditions = [];
+    if(dest.cityEn)      cityConditions.push(`h.city LIKE ${chEscape('%' + dest.cityEn + '%')}`);
+    if(dest.cityKeyword) cityConditions.push(`h.city_kr LIKE ${chEscape('%' + dest.cityKeyword + '%')}`);
+    const cityFilter = cityConditions.length > 0 ? `(${cityConditions.join(' OR ')})` : null;
+    whereClause = cityFilter
+      ? `h.country_code = ${chEscape(dest.countryCode)} AND ${cityFilter}`
+      : `h.country_code = ${chEscape(dest.countryCode)}`;
+    fallbackWhereClause = `h.country_code = ${chEscape(dest.countryCode)}`;
+  }
+
+  const PORT = process.env.PORT || 3001;
+  const serverBase = `http://localhost:${PORT}`;
+  const { checkIn, checkOut } = getNextMondayDates();
+  const seenIds = new Set();
+  const result = [];
+  const fallbackPool = [];
+  let offset = 0;
+  const batchSize = 20;
+  const maxBatches = 3;
+  let batchCount = 0;
+
+  while(result.length < 4 && batchCount < maxBatches) {
+    const sql = `
+      SELECT h.hotel_id AS hotel_id, h.name_kr AS name_kr, h.city_kr AS city_kr, h.address1 AS address1, h.address2 AS address2, h.country_code AS country_code, h.country_kr AS country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
+      FROM tripbtoz_hotels h
+      JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
+      LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
+      WHERE toMonth(b.check_in) = ${actualNextMonth}
+        AND toYear(b.check_in) = ${lastYear}
+        AND ${whereClause}
+      GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
+      ORDER BY booking_cnt DESC
+      LIMIT ${batchSize} OFFSET ${offset}`;
+
+    let dbResult;
+    try { dbResult = await runQuery(sql); } catch(_) { break; }
+    if(dbResult.type !== 'select' || !dbResult.rows.length) break;
+
+    const cols = dbResult.columns.map(c => c.toLowerCase());
+    const hotelIdIdx     = cols.indexOf('hotel_id');
+    const nameIdx        = cols.findIndex(c => ['name_kr','name_ko','name'].includes(c));
+    const cityIdx        = cols.indexOf('city_kr');
+    const addr1Idx       = cols.indexOf('address1');
+    const addr2Idx       = cols.indexOf('address2');
+    const countryCodeIdx = cols.indexOf('country_code');
+    const countryKrIdx   = cols.indexOf('country_kr');
+    const thumbIdx       = cols.indexOf('thumbnail');
+
+    const batch = dbResult.rows
+      .map(r => ({
+        hotel_id:     hotelIdIdx     >= 0 ? r[hotelIdIdx]     : null,
+        name_kr:      nameIdx        >= 0 ? r[nameIdx]        : '',
+        city_kr:      cityIdx        >= 0 ? r[cityIdx]        : '',
+        address1:     addr1Idx       >= 0 ? r[addr1Idx]       : '',
+        address2:     addr2Idx       >= 0 ? r[addr2Idx]       : '',
+        country_code: countryCodeIdx >= 0 ? r[countryCodeIdx] : '',
+        country_kr:   countryKrIdx   >= 0 ? r[countryKrIdx]   : '',
+        thumbnail:    thumbIdx       >= 0 ? r[thumbIdx]        : '',
+        price_available: false,
+      }))
+      .filter(h => h.hotel_id && !seenIds.has(h.hotel_id));
+
+    batch.forEach(h => seenIds.add(h.hotel_id));
+
+    await Promise.all(batch.map(async h => {
+      try {
+        const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) }).then(r => r.json());
+        if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
+      } catch(_) {}
+    }));
+
+    const priced = batch.filter(h => h.price_available);
+    console.log(`[season][${dest.name}] DB조회 ${dbResult.rows.length}개 → 가격있음 ${priced.length}개 (배치 ${batchCount+1}/${maxBatches})`);
+    result.push(...priced);
+    fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
+
+    if(dbResult.rows.length < batchSize) break;
+    offset += batchSize;
+    batchCount++;
+  }
+
+  // country fallback
+  if(result.length < 4 && fallbackWhereClause && fallbackWhereClause !== whereClause) {
+    console.log(`[season] ${dest.name}: city 필터로 ${result.length}개만 확보, country fallback 시도`);
+    let fbOffset = 0;
+    let fbBatch = 0;
+    while(result.length < 4 && fbBatch < maxBatches) {
+      const sql = `
+        SELECT h.hotel_id AS hotel_id, h.name_kr AS name_kr, h.city_kr AS city_kr, h.address1 AS address1, h.address2 AS address2, h.country_code AS country_code, h.country_kr AS country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
+        FROM tripbtoz_hotels h
+        JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
+        LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
+        WHERE toMonth(b.check_in) = ${actualNextMonth}
+          AND toYear(b.check_in) = ${lastYear}
+          AND ${fallbackWhereClause}
+        GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
+        ORDER BY booking_cnt DESC
+        LIMIT ${batchSize} OFFSET ${fbOffset}`;
+      let fbResult;
+      try { fbResult = await runQuery(sql); } catch(_) { break; }
+      if(fbResult.type !== 'select' || !fbResult.rows.length) break;
+      const cols = fbResult.columns.map(c => c.toLowerCase());
+      const batch = fbResult.rows.map(r => ({
+        hotel_id:     cols.indexOf('hotel_id')     >= 0 ? r[cols.indexOf('hotel_id')]     : null,
+        name_kr:      cols.findIndex(c => ['name_kr','name_ko','name'].includes(c)) >= 0 ? r[cols.findIndex(c => ['name_kr','name_ko','name'].includes(c))] : '',
+        city_kr:      cols.indexOf('city_kr')      >= 0 ? r[cols.indexOf('city_kr')]      : '',
+        address1:     cols.indexOf('address1')     >= 0 ? r[cols.indexOf('address1')]     : '',
+        address2:     cols.indexOf('address2')     >= 0 ? r[cols.indexOf('address2')]     : '',
+        country_code: cols.indexOf('country_code') >= 0 ? r[cols.indexOf('country_code')] : '',
+        country_kr:   cols.indexOf('country_kr')   >= 0 ? r[cols.indexOf('country_kr')]   : '',
+        thumbnail:    cols.indexOf('thumbnail')    >= 0 ? r[cols.indexOf('thumbnail')]    : '',
+        price_available: false,
+      })).filter(h => h.hotel_id && !seenIds.has(h.hotel_id));
+      batch.forEach(h => seenIds.add(h.hotel_id));
+      await Promise.all(batch.map(async h => {
+        try {
+          const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) }).then(r => r.json());
+          if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
+        } catch(_) {}
+      }));
+      result.push(...batch.filter(h => h.price_available));
+      fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
+      if(fbResult.rows.length < batchSize) break;
+      fbOffset += batchSize;
+      fbBatch++;
+    }
+  }
+
+  // 가격 없는 호텔로 보충
+  if(result.length < 4) {
+    const extras = fallbackPool.slice(0, 4 - result.length);
+    if(extras.length > 0) {
+      console.log(`[season][${dest.name}] 가격 없는 호텔 ${extras.length}개로 보충`);
+      result.push(...extras);
+    }
+  }
+
+  function toFlagEmoji(code) {
+    if (!code || code.length !== 2) return '';
+    return [...code.toUpperCase()].map(c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)).join('');
+  }
+  function extractCity(city_kr, address1, destName) {
+    const isCountryCode = /^[A-Z]{2,4}$/.test(city_kr || '');
+    if (!isCountryCode && city_kr && city_kr.trim().length > 0) return city_kr.trim();
+    if (address1 && /[가-힣]/.test(address1)) return address1.trim().split(/\s+/).slice(0, 2).join(' ');
+    return destName || '';
+  }
+  function buildArea(city_kr, address1, address2, country_code, country_kr, destName) {
+    const flag    = toFlagEmoji(country_code);
+    const country = country_kr && !/^[A-Z]{2,4}$/.test(country_kr) ? country_kr : '';
+    const city    = extractCity(city_kr, address1, destName);
+    const parts   = [country, city].filter(Boolean);
+    return flag ? `${flag} ${parts.join(' · ')}` : parts.join(' · ');
+  }
+
+  return result.slice(0, 4).map(h => ({
+    name:         h.name_kr,
+    area:         buildArea(h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, dest.name),
+    price:        h.discounted_price || '',
+    regularPrice: h.regular_price    || '',
+    discount:     h.discount_rate    || '',
+    img:          h.thumbnail        || '',
+    link:         h.hotel_id ? `https://www.tripbtoz.com/hotels/${h.hotel_id}?check-in=${checkIn}&check-out=${checkOut}&rooms=1&room-0-adults=2&room-0-children=0&searchId=${h.hotel_id}&searchType=HOTEL` : '',
+  }));
+}
+
 function buildHotelUrl(h, utmCampaign) {
   const base = 'https://www.tripbtoz.com/hotels';
   const { checkIn, checkOut } = getNextMondayDates();
@@ -760,7 +937,7 @@ app.post('/api/hotels/smart-pick', async (req, res) => {
   }
 });
 
-// AI 이메일 생성
+// AI 이메일 생성 (레거시 — LLM 호출은 프론트로 이전, 이 엔드포인트는 미사용)
 app.post('/api/ai-generate', async (req, res) => {
   const apiKey = process.env.LLM_GATEWAY_API_KEY;
   const gatewayUrl = process.env.LLM_GATEWAY_URL || 'https://llm-gateway.tbz.kr';
@@ -936,7 +1113,41 @@ app.get('/api/hotel-price/:hotelId', async (req, res) => {
   }
 });
 
-// AI 시즌 프로모션 자동 생성 (국내2+해외2 여행지별 DB 호텔 + LLM 텍스트)
+// 시즌 프로모션 호텔 조회 (LLM은 프론트에서 처리, 여기선 DB 조회만)
+// POST /api/hotels/season-hotels
+// Body: { destinations: [...], yearMonth: "2026-05" }
+app.post('/api/hotels/season-hotels', async (req, res) => {
+  const { destinations, yearMonth } = req.body;
+  if(!destinations?.length) return res.status(400).json({ error: 'destinations 필수' });
+  if(!yearMonth) return res.status(400).json({ error: 'yearMonth 필수' });
+
+  const now = new Date();
+  const nextMonthIdx = (now.getMonth() + 1) % 12;
+  const lastYear = now.getFullYear() - 1;
+  const actualNextMonth = nextMonthIdx + 1;
+
+  try {
+    const hotelsByDest = await Promise.all(destinations.map(d => getHotelsForCity(d)));
+    // destination history 저장
+    const toInsert = destinations.map(d => ({
+      year_month: yearMonth,
+      destination_name: d.name,
+      destination_type: d.type,
+      country_code: d.countryCode || null,
+      city_keyword: d.cityKeyword || null,
+      city_en: d.cityEn || null,
+    }));
+    await sb.from('season_destination_history').insert(toInsert);
+    const result = {};
+    destinations.forEach((d, i) => { result[d.name] = hotelsByDest[i]; });
+    res.json({ hotels: result });
+  } catch(e) {
+    console.error('[season-hotels] 에러:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 레거시: 이전 시즌 프로모션 엔드포인트 (LLM 사내망 필요 — 프론트로 이전됨)
 app.post('/api/ai/season-generate', async (req, res) => {
   const apiKey = process.env.LLM_GATEWAY_API_KEY;
   const gatewayUrl = process.env.LLM_GATEWAY_URL || 'https://llm-gateway.tbz.kr';
@@ -965,191 +1176,6 @@ app.post('/api/ai/season-generate', async (req, res) => {
     return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
   }
 
-  async function getHotelsForCity(dest) {
-    let whereClause;
-    let fallbackWhereClause = null; // city 필터 결과 부족 시 country_code만으로 재시도
-    if(dest.type === 'domestic') {
-      whereClause = `h.city_kr LIKE ${chEscape('%' + dest.cityKeyword + '%')}`;
-    } else {
-      // 국가코드 + 영문/한글 도시명 필터 (country_code만 쓰면 도쿄→오키나와 혼입 등 문제)
-      const cityConditions = [];
-      if(dest.cityEn)      cityConditions.push(`h.city LIKE ${chEscape('%' + dest.cityEn + '%')}`);
-      if(dest.cityKeyword) cityConditions.push(`h.city_kr LIKE ${chEscape('%' + dest.cityKeyword + '%')}`);
-      const cityFilter = cityConditions.length > 0 ? `(${cityConditions.join(' OR ')})` : null;
-      whereClause = cityFilter
-        ? `h.country_code = ${chEscape(dest.countryCode)} AND ${cityFilter}`
-        : `h.country_code = ${chEscape(dest.countryCode)}`;
-      // 발리/푸켓처럼 도시가 서브지역으로 분산된 경우 fallback
-      fallbackWhereClause = `h.country_code = ${chEscape(dest.countryCode)}`;
-    }
-
-    const PORT = process.env.PORT || 3001;
-    const serverBase = `http://localhost:${PORT}`;
-    const { checkIn, checkOut } = getNextMondayDates();
-    const seenIds = new Set();
-    const result = [];       // 가격 있는 호텔
-    const fallbackPool = []; // 가격 없는 호텔 (가격 있는 게 부족할 때 보조)
-    let offset = 0;
-    const batchSize = 20;    // 한 번에 더 많이 조회
-    const maxBatches = 3;    // 최대 3배치(60개) 조회 후 중단
-    let batchCount = 0;
-
-    while(result.length < 4 && batchCount < maxBatches) {
-      const sql = `
-        SELECT h.hotel_id AS hotel_id, h.name_kr AS name_kr, h.city_kr AS city_kr, h.address1 AS address1, h.address2 AS address2, h.country_code AS country_code, h.country_kr AS country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
-        FROM tripbtoz_hotels h
-        JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
-        LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
-        WHERE toMonth(b.check_in) = ${actualNextMonth}
-          AND toYear(b.check_in) = ${lastYear}
-          AND ${whereClause}
-        GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
-        ORDER BY booking_cnt DESC
-        LIMIT ${batchSize} OFFSET ${offset}`;
-
-      let dbResult;
-      try { dbResult = await runQuery(sql); } catch(_) { break; }
-      if(dbResult.type !== 'select' || !dbResult.rows.length) break;
-
-      const cols = dbResult.columns.map(c => c.toLowerCase());
-      const hotelIdIdx     = cols.indexOf('hotel_id');
-      const nameIdx        = cols.findIndex(c => ['name_kr','name_ko','name'].includes(c));
-      const cityIdx        = cols.indexOf('city_kr');
-      const addr1Idx       = cols.indexOf('address1');
-      const addr2Idx       = cols.indexOf('address2');
-      const countryCodeIdx = cols.indexOf('country_code');
-      const countryKrIdx   = cols.indexOf('country_kr');
-      const thumbIdx       = cols.indexOf('thumbnail');
-
-      const batch = dbResult.rows
-        .map(r => ({
-          hotel_id:     hotelIdIdx     >= 0 ? r[hotelIdIdx]     : null,
-          name_kr:      nameIdx        >= 0 ? r[nameIdx]        : '',
-          city_kr:      cityIdx        >= 0 ? r[cityIdx]        : '',
-          address1:     addr1Idx       >= 0 ? r[addr1Idx]       : '',
-          address2:     addr2Idx       >= 0 ? r[addr2Idx]       : '',
-          country_code: countryCodeIdx >= 0 ? r[countryCodeIdx] : '',
-          country_kr:   countryKrIdx   >= 0 ? r[countryKrIdx]   : '',
-          thumbnail:    thumbIdx       >= 0 ? r[thumbIdx]        : '',
-          price_available: false,
-        }))
-        .filter(h => h.hotel_id && !seenIds.has(h.hotel_id));
-
-      batch.forEach(h => seenIds.add(h.hotel_id));
-
-      // 가격 API 병렬 조회
-      await Promise.all(batch.map(async h => {
-        try {
-          const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) }).then(r => r.json());
-          if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
-        } catch(_) {}
-      }));
-
-      const priced = batch.filter(h => h.price_available);
-      console.log(`[season][${dest.name}] DB조회 ${dbResult.rows.length}개 → 가격있음 ${priced.length}개 (배치 ${batchCount+1}/${maxBatches})`);
-      result.push(...priced);
-      // 가격 없는 호텔도 fallback용으로 보관 (썸네일 있는 것 우선)
-      fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
-
-      if(dbResult.rows.length < batchSize) break;
-      offset += batchSize;
-      batchCount++;
-    }
-
-    // 도시 필터로 4개 못 채운 경우 (발리/푸켓 등 서브지역 분산 목적지) → country fallback
-    // country fallback (발리/푸켓 등 도시명이 서브지역으로 분산된 경우)
-    if(result.length < 4 && fallbackWhereClause && fallbackWhereClause !== whereClause) {
-      console.log(`[season] ${dest.name}: city 필터로 ${result.length}개만 확보, country fallback 시도`);
-      let fbOffset = 0;
-      let fbBatch = 0;
-      while(result.length < 4 && fbBatch < maxBatches) {
-        const sql = `
-          SELECT h.hotel_id AS hotel_id, h.name_kr AS name_kr, h.city_kr AS city_kr, h.address1 AS address1, h.address2 AS address2, h.country_code AS country_code, h.country_kr AS country_kr, MAX(ac.thumbnail) AS thumbnail, COUNT(*) AS booking_cnt
-          FROM tripbtoz_hotels h
-          JOIN tripbtoz_bookings b ON b.hotel_id = h.hotel_id
-          LEFT JOIN tripbtoz_meta_accommodation_common ac ON ac.id = h.hotel_id
-          WHERE toMonth(b.check_in) = ${actualNextMonth}
-            AND toYear(b.check_in) = ${lastYear}
-            AND ${fallbackWhereClause}
-          GROUP BY h.hotel_id, h.name_kr, h.city_kr, h.address1, h.address2, h.country_code, h.country_kr
-          ORDER BY booking_cnt DESC
-          LIMIT ${batchSize} OFFSET ${fbOffset}`;
-        let fbResult;
-        try { fbResult = await runQuery(sql); } catch(_) { break; }
-        if(fbResult.type !== 'select' || !fbResult.rows.length) break;
-        const cols = fbResult.columns.map(c => c.toLowerCase());
-        const batch = fbResult.rows.map(r => ({
-          hotel_id:     cols.indexOf('hotel_id')     >= 0 ? r[cols.indexOf('hotel_id')]     : null,
-          name_kr:      cols.findIndex(c => ['name_kr','name_ko','name'].includes(c)) >= 0 ? r[cols.findIndex(c => ['name_kr','name_ko','name'].includes(c))] : '',
-          city_kr:      cols.indexOf('city_kr')      >= 0 ? r[cols.indexOf('city_kr')]      : '',
-          address1:     cols.indexOf('address1')     >= 0 ? r[cols.indexOf('address1')]     : '',
-          address2:     cols.indexOf('address2')     >= 0 ? r[cols.indexOf('address2')]     : '',
-          country_code: cols.indexOf('country_code') >= 0 ? r[cols.indexOf('country_code')] : '',
-          country_kr:   cols.indexOf('country_kr')   >= 0 ? r[cols.indexOf('country_kr')]   : '',
-          thumbnail:    cols.indexOf('thumbnail')    >= 0 ? r[cols.indexOf('thumbnail')]    : '',
-          price_available: false,
-        })).filter(h => h.hotel_id && !seenIds.has(h.hotel_id));
-        batch.forEach(h => seenIds.add(h.hotel_id));
-        await Promise.all(batch.map(async h => {
-          try {
-            const p = await fetch(`${serverBase}/api/hotel-price/${h.hotel_id}`, { signal: AbortSignal.timeout(8000) }).then(r => r.json());
-            if(p.available) { h.price_available = true; h.discounted_price = p.discounted_price; h.regular_price = p.regular_price; h.discount_rate = p.discount_rate; }
-          } catch(_) {}
-        }));
-        result.push(...batch.filter(h => h.price_available));
-        fallbackPool.push(...batch.filter(h => !h.price_available && h.thumbnail));
-        if(fbResult.rows.length < batchSize) break;
-        fbOffset += batchSize;
-        fbBatch++;
-      }
-    }
-
-    // 가격 있는 호텔 4개 못 채운 경우: 가격 없는 호텔로 보충 (이름+썸네일은 있음)
-    if(result.length < 4) {
-      const needed = 4 - result.length;
-      const extras = fallbackPool.slice(0, needed);
-      if(extras.length > 0) {
-        console.log(`[season][${dest.name}] 가격 없는 호텔 ${extras.length}개로 보충`);
-        result.push(...extras);
-      }
-    }
-
-    // 국가코드 → 국기 이모지 (예: 'KR' → '🇰🇷')
-    function toFlagEmoji(code) {
-      if (!code || code.length !== 2) return '';
-      return [...code.toUpperCase()].map(c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)).join('');
-    }
-
-    // 도시명 추출
-    function extractCity(city_kr, address1, destName) {
-      const isCountryCode = /^[A-Z]{2,4}$/.test(city_kr || '');
-      if (!isCountryCode && city_kr && city_kr.trim().length > 0) return city_kr.trim();
-      if (address1 && /[가-힣]/.test(address1)) {
-        const parts = address1.trim().split(/\s+/);
-        return parts.slice(0, 2).join(' ');
-      }
-      return destName || '';
-    }
-
-    // 최종 표시: 🇰🇷 대한민국 · 서울 강남구 / 🇯🇵 일본 · 도쿄
-    function buildArea(city_kr, address1, address2, country_code, country_kr, destName) {
-      const flag    = toFlagEmoji(country_code);
-      const country = country_kr && !/^[A-Z]{2,4}$/.test(country_kr) ? country_kr : '';
-      const city    = extractCity(city_kr, address1, destName);
-      const parts   = [country, city].filter(Boolean);
-      return flag ? `${flag} ${parts.join(' · ')}` : parts.join(' · ');
-    }
-
-    return result.slice(0, 4).map(h => ({
-      name:          h.name_kr,
-      area:          buildArea(h.city_kr, h.address1, h.address2, h.country_code, h.country_kr, dest.name),
-      price:         h.discounted_price || '',
-      regularPrice:  h.regular_price    || '',
-      discount:      h.discount_rate    || '',
-      img:           h.thumbnail        || '',
-      link:     h.hotel_id ? `https://www.tripbtoz.com/hotels/${h.hotel_id}?check-in=${checkIn}&check-out=${checkOut}&rooms=1&room-0-adults=2&room-0-children=0&searchId=${h.hotel_id}&searchType=HOTEL` : '',
-    }));
-  }
 
   try {
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;

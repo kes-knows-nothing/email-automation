@@ -6,6 +6,28 @@ const API_BASE = location.hostname === 'localhost' || location.hostname === '127
   : 'https://email-automation-production-7cba.up.railway.app';
 
 // ═══════════════════════════════════════════
+// LLM GATEWAY (사내망 직접 호출)
+// ═══════════════════════════════════════════
+const LLM_GATEWAY_URL = 'https://llm-gateway.tbz.kr';
+const LLM_GATEWAY_API_KEY = 'llm_A13p7hpAJuXqiBAaNrFjKOgw-rBTyh-G';
+
+async function callLLM(systemPrompt, maxTokens = 1024) {
+  const r = await fetch(`${LLM_GATEWAY_URL}/v1/proxy/bedrock/converse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Api-Key': LLM_GATEWAY_API_KEY },
+    body: JSON.stringify({
+      modelId: 'apac.anthropic.claude-sonnet-4-20250514-v1:0',
+      system: [{ text: systemPrompt }],
+      messages: [{ role: 'user', content: [{ text: 'JSON만 출력해주세요.' }] }],
+      inferenceConfig: { maxTokens },
+    }),
+  });
+  const d = await r.json();
+  const text = d.output?.message?.content?.[0]?.text || '';
+  return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+}
+
+// ═══════════════════════════════════════════
 // STORAGE (Supabase)
 // ═══════════════════════════════════════════
 const SUPABASE_URL = 'https://vihwzugbrulsxbembkby.supabase.co';
@@ -2534,84 +2556,163 @@ async function generateSeasonPromotion() {
   btn.disabled = true; btn.textContent = '생성 중...';
   showAILoading(['🗺️ 이달의 여행지 선정 중...', '🏨 호텔 데이터 조회 중...', '💰 차주 최저가 확인 중...', '✨ 이메일 템플릿 생성 중...']);
   try {
-    const res = await fetch(API_BASE + '/api/ai/season-generate', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-    const data = await res.json();
-    if(data.error) { showToast('오류: ' + data.error); return; }
-    if(!data.blocks?.length) { showToast('생성 결과가 없습니다'); return; }
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const seasonTag = `[시즌] ${yearMonth}`;
+    const KO_MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+    const nextMonthIdx = (now.getMonth() + 1) % 12;
+    const monthName = KO_MONTHS[nextMonthIdx];
 
-    currentTplId = null;
+    // Step 0. 미발송 기존 템플릿 재사용
+    const { data: existingTpls } = await sb.from('templates')
+      .select('id, name, blocks')
+      .like('name', `${seasonTag}%`)
+      .order('created_at', { ascending: false });
+
+    if(existingTpls && existingTpls.length > 0) {
+      for(const tpl of existingTpls) {
+        const { data: schedules } = await sb.from('email_schedules')
+          .select('id, status')
+          .eq('template_id', tpl.id)
+          .in('status', ['pending', 'sent', 'failed'])
+          .limit(1);
+        if(!schedules || schedules.length === 0) {
+          currentTplId = null; nextId = 1;
+          blocks = tpl.blocks.map(b => ({ ...b, id: nextId++, open: false }));
+          document.getElementById('tpl-name-input').value = tpl.name;
+          showView('editor'); render(); rp();
+          showToast(`기존 미발송 템플릿 재사용: ${tpl.name}`);
+          return;
+        }
+      }
+    }
+
+    // Step 1. 이미 발송한 여행지 조회
+    const { data: historyRows } = await sb.from('season_destination_history')
+      .select('destination_name').eq('year_month', yearMonth);
+    const usedDestinations = (historyRows || []).map(r => r.destination_name);
+    const excludeNote = usedDestinations.length > 0
+      ? `\n\n⚠️ 이번 달(${monthName})에 이미 추천한 여행지: [${usedDestinations.join(', ')}]\n반드시 위 여행지는 제외하고 새로운 여행지를 선정해주세요.`
+      : '';
+
+    // Step 2. LLM: 여행지 선정 (사내망 직접 호출)
+    const destinations = await callLLM(
+      `트립비토즈 호텔 예약 서비스 이메일 마케터입니다.
+${monthName}에 여행하기 좋은 여행지를 국내 2곳, 해외 2곳 총 4곳을 선정해주세요.
+해외 여행지는 ISO 2자리 countryCode도 포함해주세요 (일본=JP, 태국=TH, 베트남=VN, 싱가포르=SG, 미국=US, 프랑스=FR 등).${excludeNote}
+
+다음 JSON 형식으로만 응답하세요:
+{
+  "subject": "이메일 제목 (50자 이내)",
+  "titleText": "이메일 헤드라인 (30자 이내)",
+  "introText": "전체 소개 문구 (2문장)",
+  "destinations": [
+    { "name": "제주도", "type": "domestic", "cityKeyword": "제주", "description": "여행지 소개 3~4문장. 계절감, 추천 활동, 분위기를 담아 이메일 독자가 여행을 상상할 수 있게 작성" },
+    { "name": "부산", "type": "domestic", "cityKeyword": "부산", "description": "여행지 소개 3~4문장" },
+    { "name": "도쿄", "type": "international", "countryCode": "JP", "cityEn": "Tokyo", "cityKeyword": "도쿄", "description": "여행지 소개 3~4문장" },
+    { "name": "방콕", "type": "international", "countryCode": "TH", "cityEn": "Bangkok", "cityKeyword": "방콕", "description": "여행지 소개 3~4문장" }
+  ]
+}`, 2500);
+
+    // Step 3. 백엔드: 여행지별 호텔 조회 (ClickHouse + 가격 API)
+    const hotelRes = await fetch(API_BASE + '/api/hotels/season-hotels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destinations: destinations.destinations, yearMonth }),
+    });
+    const hotelData = await hotelRes.json();
+    if(hotelData.error) throw new Error(hotelData.error);
+
+    // Step 4. 블록 조립
+    const newBlocks = [{ type: 'logo', data: {} }];
+    newBlocks.push({ type: 'title', data: { text: destinations.titleText || `${monthName} 추천 여행지` } });
+    newBlocks.push({ type: 'text',  data: { text: destinations.introText || '' } });
+    destinations.destinations.forEach(dest => {
+      const flag = dest.type === 'domestic' ? '🇰🇷' : '✈️';
+      newBlocks.push({ type: 'subtitle', data: { text: `${flag} ${dest.name}`, size: 'medium' } });
+      newBlocks.push({ type: 'text',     data: { text: dest.description || '' } });
+      newBlocks.push({ type: 'hotels',   data: { hotels: hotelData.hotels?.[dest.name] || [] } });
+    });
+    newBlocks.push({ type: 'footer', data: { footerType: 'marketing' } });
+
+    // Step 5. Supabase 저장
+    const sendNum = (existingTpls ? existingTpls.length : 0) + 1;
+    const autoSubject = destinations.subject || `${monthName} 인기 여행지 호텔 특가`;
+    const autoTplName = `${seasonTag} (${sendNum}차) ${autoSubject}`;
+    const { data: savedTpl } = await sb.from('templates').insert({
+      name: autoTplName,
+      blocks: newBlocks,
+      updated_at: new Date().toISOString(),
+    }).select('id').single();
+
+    currentTplId = savedTpl?.id || null;
     nextId = 1;
-    blocks = data.blocks.map(b => ({ ...b, id: nextId++, open: false }));
-    document.getElementById('tpl-name-input').value = data.subject || '';
-    showView('editor');
-    render(); rp();
-    const sendCount = data.meta?.sendCount || 1;
-    const newDests = (data.meta?.newDestinations || []).join(', ');
-    showToast(`이번 달 ${sendCount}차 발송 템플릿 생성 완료!\n${newDests}`);
+    blocks = newBlocks.map(b => ({ ...b, id: nextId++, open: false }));
+    document.getElementById('tpl-name-input').value = autoTplName;
+    showView('editor'); render(); rp();
+    showToast(`이번 달 ${sendNum}차 발송 템플릿 생성 완료!\n${destinations.destinations.map(d => d.name).join(', ')}`);
   } catch(e) {
-    showToast('서버 연결 실패: ' + e.message);
+    showToast('생성 실패: ' + e.message);
   } finally {
     hideAILoading();
     btn.disabled = false; btn.textContent = '🗓 시즌 프로모션 자동 생성';
   }
 }
 
-async function generateTriggerMailFromList() {
-  const prompt = document.getElementById('list-ai-prompt').value.trim();
-  if(!prompt) { showToast('위 프롬프트에 변수 목록을 입력해주세요\n예: guest_name, hotel_name, check_in, check_out'); return; }
-
-  const btn = document.getElementById('list-trigger-btn');
-  btn.disabled = true; btn.textContent = '생성 중...';
-
-  // 프롬프트에서 변수 파싱 ({{var}} 또는 쉼표 구분 단어)
-  const varMatches = prompt.match(/\{\{(\w+)\}\}/g);
-  const vars = varMatches
-    ? varMatches.map(v => v.replace(/\{\{|\}\}/g, ''))
-    : prompt.split(',').map(v => v.trim()).filter(v => /^\w+$/.test(v));
-
-  try {
-    const res = await fetch(API_BASE + '/api/ai-generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: `트랜잭셔널 이메일 템플릿 생성. 변수: ${vars.map(v => '{{'+v+'}}').join(', ')}`,
-        type: 'transactional',
-        vars,
-      }),
-    });
-    const data = await res.json();
-    if(data.error) { showToast('AI 오류: ' + data.error); return; }
-    if(!data.blocks?.length) { showToast('생성 결과가 없습니다'); return; }
-
-    currentTplId = null;
-    nextId = 1;
-    // logo + 생성블록 + footer(info)
-    blocks = [
-      { id: nextId++, type: 'logo', open: false, data: {} },
-      ...data.blocks.map(b => ({ ...b, id: nextId++, open: false })),
-      { id: nextId++, type: 'footer', open: false, data: { footerType: 'info' } },
-    ];
-    document.getElementById('tpl-name-input').value = data.subject || '트리거 메일';
-    showView('editor');
-    render(); rp();
-    showToast('트리거 메일 템플릿 생성 완료! 확인 후 저장하세요');
-  } catch(e) {
-    showToast('서버 연결 실패: ' + e.message);
-  } finally {
-    btn.disabled = false; btn.textContent = '📨 트리거 메일 생성';
+// 트리거 메일 필드 칩 토글
+document.addEventListener('click', function(e) {
+  if(e.target.classList.contains('trigger-field-chip')) {
+    e.target.classList.toggle('active');
   }
+});
+
+function generateTriggerMailFromList() {
+  const activeChips = document.querySelectorAll('.trigger-field-chip.active');
+  if(!activeChips.length) { showToast('항목을 1개 이상 선택해주세요'); return; }
+
+  const rows = [...activeChips].map(c => ({
+    label: c.dataset.label,
+    value: `{{${c.dataset.key}}}`,
+  }));
+
+  currentTplId = null;
+  nextId = 1;
+  blocks = [
+    { id: nextId++, type: 'logo',  open: false, data: {} },
+    { id: nextId++, type: 'title', open: false, data: { text: '예약 확인 안내' } },
+    { id: nextId++, type: 'reservation', open: false, data: {
+      title: '예약 내역',
+      rows,
+      ctaText: '예약 확인하기',
+      ctaLink: 'https://www.tripbtoz.com',
+    }},
+    { id: nextId++, type: 'footer', open: false, data: { footerType: 'info' } },
+  ];
+  document.getElementById('tpl-name-input').value = '예약 확인 안내';
+  showView('editor');
+  render(); rp();
+  showToast('트리거 메일 템플릿 생성 완료! 에디터에서 수정하세요');
 }
 
 async function _aiGenerateAndOpen(prompt) {
   showAILoading(['💡 프롬프트 분석 중...', '✍️ 콘텐츠 생성 중...', '🎨 템플릿 구성 중...']);
   try {
-    const res = await fetch(API_BASE + '/api/ai-generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
-    });
-    const data = await res.json();
-    if(data.error) { showToast('AI 오류: ' + data.error); return; }
+    const data = await callLLM(`트립비토즈 호텔 예약 서비스의 마케팅 이메일을 생성해주세요.
+
+사용자 요청: ${prompt}
+
+다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):
+{
+  "subject": "이메일 제목",
+  "blocks": [
+    { "type": "title", "data": { "text": "..." } },
+    { "type": "text", "data": { "text": "..." } },
+    { "type": "cta", "data": { "text": "버튼 텍스트", "url": "https://www.tripbtoz.com" } }
+  ]
+}
+
+사용 가능한 블록 타입: title, subtitle, text, highlight, cta, divider, notice
+로고 블록과 푸터 블록은 포함하지 마세요. 본문 내용 블록만 생성하세요.`, 2048);
     if(!data.blocks?.length) { showToast('생성 결과가 없습니다'); return; }
 
     currentTplId = null;
@@ -2653,13 +2754,22 @@ async function aiGenerate() {
   showAILoading(['💡 프롬프트 분석 중...', '✍️ 콘텐츠 생성 중...', '🎨 템플릿 구성 중...']);
 
   try {
-    const res = await fetch(API_BASE + '/api/ai-generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
-    });
-    const data = await res.json();
-    if(data.error) { showToast('AI 오류: ' + data.error); return; }
+    const data = await callLLM(`트립비토즈 호텔 예약 서비스의 마케팅 이메일을 생성해주세요.
+
+사용자 요청: ${prompt}
+
+다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):
+{
+  "subject": "이메일 제목",
+  "blocks": [
+    { "type": "title", "data": { "text": "..." } },
+    { "type": "text", "data": { "text": "..." } },
+    { "type": "cta", "data": { "text": "버튼 텍스트", "url": "https://www.tripbtoz.com" } }
+  ]
+}
+
+사용 가능한 블록 타입: title, subtitle, text, highlight, cta, divider, notice
+로고 블록과 푸터 블록은 포함하지 마세요. 본문 내용 블록만 생성하세요.`, 2048);
 
     if(data.blocks && Array.isArray(data.blocks)) {
       nextId = 1;
@@ -2676,7 +2786,7 @@ async function aiGenerate() {
       document.getElementById('tpl-name-input').value = data.subject;
     }
   } catch(e) {
-    showToast('서버 연결 실패: ' + e.message);
+    showToast('AI 생성 실패: ' + e.message);
   } finally {
     hideAILoading();
     btn.disabled = false;
@@ -2843,22 +2953,35 @@ async function generateTriggerTemplate() {
   btn.disabled = true;
 
   try {
-    const res = await fetch(`${API_BASE}/api/ai-generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: `트랜잭셔널 이메일 템플릿을 만들어주세요.
+    const data = await callLLM(`트립비토즈 호텔 예약 서비스의 트랜잭셔널 이메일 템플릿을 생성해주세요.
+
+사용자 요청: 트랜잭셔널 이메일 템플릿을 만들어주세요.
 이벤트: ${eventName || '트랜잭셔널'}
 사용 변수: ${varList.map(v => '{{' + v + '}}').join(', ')}
 
-반드시 reservation 블록을 포함하고, 위 변수들을 예약 내역 표의 행(row)에 적절히 배치해주세요.
-reservation 블록의 rows는 { label: "한국어 라벨", value: "{{변수명}}" } 형태여야 합니다.`,
-        type: 'transactional',
-        vars: varList,
-      }),
-    });
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
+다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):
+{
+  "subject": "이메일 제목",
+  "blocks": [
+    { "type": "title", "data": { "text": "..." } },
+    { "type": "text", "data": { "text": "..." } },
+    { "type": "reservation", "data": {
+        "title": "예약 내역",
+        "rows": [
+          { "label": "한국어 라벨", "value": "{{변수명}}" }
+        ],
+        "ctaText": "예약 확인하기",
+        "ctaLink": "https://www.tripbtoz.com"
+    }},
+    { "type": "notice", "data": { "n1": "...", "n2": "..." } }
+  ]
+}
+
+사용 가능한 블록 타입: title, subtitle, text, highlight, reservation, cta, divider, notice
+- reservation 블록 반드시 포함, rows에 제공된 변수 전부 적절한 한국어 라벨로 배치
+- 로고/푸터 블록 포함하지 말 것 (자동으로 추가됨)
+- 변수는 반드시 {{변수명}} 형태 유지
+- 제공된 변수 목록: ${varList.map(v => '{{'+v+'}}').join(', ')}`, 2048);
 
     // subject가 있으면 제거하고 blocks만 사용
     const generatedBlocks = data.blocks || [];
