@@ -120,7 +120,18 @@
           </div>
         </div>
       </div>
-      <button class="list-ai-trigger-btn" id="list-trigger-btn" onclick="generateTriggerMailFromList()">📨 트리거 메일 생성</button>
+      <div class="trigger-mail-section">
+        <div class="trigger-mail-label">📨 트리거 메일 — 포함할 항목 선택</div>
+        <div class="trigger-field-chips" id="trigger-field-chips">
+          <span class="trigger-field-chip active" data-key="booking_number" data-label="예약번호">예약번호</span>
+          <span class="trigger-field-chip active" data-key="hotel_name" data-label="숙소명">숙소명</span>
+          <span class="trigger-field-chip active" data-key="hotel_address" data-label="숙소 주소">숙소 주소</span>
+          <span class="trigger-field-chip active" data-key="room_name" data-label="객실명">객실명</span>
+          <span class="trigger-field-chip active" data-key="stay_period" data-label="투숙기간">투숙기간</span>
+          <span class="trigger-field-chip active" data-key="benefit" data-label="혜택">혜택</span>
+        </div>
+        <button class="list-ai-trigger-btn" id="list-trigger-btn" onclick="generateTriggerMailFromList()">📨 트리거 메일 생성</button>
+      </div>
     </div>
   </div>
   <div class="tpl-grid" id="tpl-grid"></div>
