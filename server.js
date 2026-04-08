@@ -1174,8 +1174,8 @@ app.post('/api/hotels/season-hotels', async (req, res) => {
     const usedKeywords = destinations.map(d => d.cityKeyword).filter(Boolean);
 
     for(let i = 0; i < hotelsByDest.length; i++) {
-      if(hotelsByDest[i].length === 0) {
-        console.log(`[season] ${destinations[i].name}: 호텔 없음, 대체 도시 탐색 중...`);
+      if(hotelsByDest[i].length < 4) {
+        console.log(`[season] ${destinations[i].name}: 호텔 ${hotelsByDest[i].length}개 (최소 4개 미만), 대체 도시 탐색 중...`);
         const replacement = await findReplacementCity(destinations[i].type, usedKeywords);
         if(replacement) {
           hotelsByDest[i] = replacement.hotels;
